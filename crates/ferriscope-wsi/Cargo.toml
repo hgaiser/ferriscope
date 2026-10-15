@@ -1,0 +1,27 @@
+[package]
+name = "ferriscope-wsi"
+description = "Vulkan WSI layer: presents games straight to ferriscope's Wayland surfaces, with HDR and pacing feedback"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Vulkan types only; the layer never loads the loader itself.
+ash = { version = "0.38", default-features = false, features = ["debug"] }
+wayland-client = "0.31"
+# `client_system` so the layer's wl_display is a real libwayland one: the
+# driver's Wayland WSI calls libwayland on it. `dlopen` so the layer does not
+# link libwayland-client, which a process without it would not survive.
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+wayland-scanner = "0.31"
+# `wl_proxy_set_queue`, which wayland-client does not expose.
+wayland-sys = { version = "0.31", features = ["client", "dlopen"] }
+libc = "0.2"
+
+[lints]
+workspace = true

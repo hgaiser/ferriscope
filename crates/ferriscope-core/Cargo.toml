@@ -1,0 +1,44 @@
+[package]
+name = "ferriscope-core"
+description = "Core compositor implementation for ferriscope"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# CPU PPM frame recorder and a text input control socket, for the `ferriscope`
+# binary and the integration tests. Embedders leave it off.
+test-support = []
+
+[dependencies]
+# `bitflags` is required by the code generated for the protocol's `arm_flag` /
+# `trigger_flag` bitfields. Already in the tree (via smithay/wayland-server).
+bitflags = "2"
+smithay.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# `gamescope_action_binding_manager` server bindings (`action_binding`). The
+# 0.31 `wayland-scanner` line exposes code generation only as proc macros, so it
+# is a normal (compile-time proc-macro) dependency, not a build-dependency;
+# `wayland-server` and `bitflags` are the same instances smithay
+# already resolves, so no new crate enters the tree.
+wayland-scanner = "0.31"
+wayland-server = "0.31"
+wayland-backend = "0.3"
+
+[dev-dependencies]
+# The integration tests need the recorder output and control socket.
+ferriscope-core = { path = ".", features = ["test-support"] }
+# Native Wayland test client for the focus and capture tests. Test-only; the
+# product never links a Wayland client. Pinned to the wayland-* line smithay
+# uses (client 0.31 / protocols 0.32, both on wayland-backend 0.3).
+tracing-subscriber.workspace = true
+# RandR client for the XRandR-emulation test; already in the tree via smithay.
+x11rb = { version = "0.13", features = ["randr"] }
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = ["client", "staging", "unstable"] }
+
+[lints]
+workspace = true
