@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="ferriscope_swapchain_v1">
+
+  <copyright>
+    Copyright © 2023 Joshua Ashton for Valve Software
+    Copyright © 2025 ferriscope contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <description summary="ferriscope swapchain protocol, version 1">
+    This is a private ferriscope protocol spoken by the ferriscope Vulkan WSI
+    layer (VK_LAYER_FERRISCOPE_wsi). Regular Wayland clients must not use it.
+
+    It derives from gamescope_swapchain_factory_v2 / gamescope_swapchain of the
+    Gamescope project, without what only Gamescope needs, plus two events on
+    the factory that tell the layer what the compositor can do:
+
+    - hdr_available: whether the layer should expose HDR surface formats.
+    - xwayland_server: the identity of the Xwayland server this compositor
+      runs, to be compared with the FERRISCOPE_XWAYLAND_SERVER_ID property on
+      the X11 root window so the layer knows an X11 connection is to this
+      compositor's own Xwayland.
+
+    A change to the protocol that old layers cannot ignore gets a new
+    interface name (..._v2), not a new version of these.
+  </description>
+
+  <interface name="ferriscope_swapchain_factory_v1" version="1">
+    <request name="destroy" type="destructor"></request>
+
+    <request name="create_swapchain">
+      <description summary="create ferriscope swapchain interface">
+      </description>
+
+      <arg name="surface" type="object" interface="wl_surface"
+           summary="target surface"/>
+      <arg name="callback" type="new_id" interface="ferriscope_swapchain_v1"
+           summary="new swapchain object"/>
+    </request>
+
+    <event name="hdr_available">
+      <description summary="whether HDR swapchains can be presented">
+        Sent when the factory is bound and whenever the answer changes.
+
+        When available is 1 the compositor can present HDR10 (PQ) and scRGB
+        swapchains, and the layer may expose those surface formats to the
+        application. When 0 the layer exposes SDR formats only.
+      </description>
+      <arg name="available" type="uint" summary="1 if HDR is available, else 0"/>
+    </event>
+
+    <event name="xwayland_server">
+      <description summary="identity of the compositor's Xwayland server">
+        Sent when the factory is bound and whenever the answer changes.
+
+        server_id is also published as the 32-bit CARDINAL property
+        FERRISCOPE_XWAYLAND_SERVER_ID on the root window of the compositor's
+        Xwayland. A layer that finds the same value on the root window of its
+        X11 connection knows that connection is to this compositor's Xwayland,
+        and may use override_window_content with it. server_id 0 means the
+        compositor has no Xwayland server (yet); nothing is bypassable.
+      </description>
+      <arg name="server_id" type="uint" summary="Xwayland server id, or 0 for none"/>
+    </event>
+  </interface>
+
+  <interface name="ferriscope_swapchain_v1" version="1">
+    <request name="destroy" type="destructor"></request>
+
+    <request name="override_window_content">
+      <description summary="override an X11's window wl_surface">
+        Xwayland creates a wl_surface for each X11 window. It sends a
+        WL_SURFACE_ID client message to indicate the mapping between the X11
+        windows and the wl_surface objects.
+
+        This request overrides this mapping for a given X11 window, allowing an
+        X11 client to submit buffers via the Wayland protocol. The override
+        only affects buffer submission. Everything else (e.g. input events)
+        still uses Xwayland's WL_SURFACE_ID.
+      </description>
+      <arg name="xwayland_server_id" type="uint" summary="the xwayland_server id the layer saw on the X11 root window"/>
+      <arg name="x11_window" type="uint" summary="X11 window ID"/>
+    </request>
+
+    <request name="swapchain_feedback">
+      <description summary="provide swapchain feedback">
+        Provide swapchain feedback to the compositor.
+
+        Provides image count ahead of time, and colorspace info for HDR. The
+        colourspace is the one the application asked for; the layer presents
+        the images to the driver as sRGB.
+      </description>
+      <arg name="image_count" type="uint" summary="image count of swapchain"/>
+      <arg name="vk_format" type="uint" summary="VkFormat of swapchain"/>
+      <arg name="vk_colorspace" type="uint" summary="VkColorSpaceKHR of swapchain"/>
+      <arg name="vk_composite_alpha" type="uint" summary="VkCompositeAlphaFlagBitsKHR of swapchain"/>
+      <arg name="vk_pre_transform" type="uint" summary="VkSurfaceTransformFlagBitsKHR of swapchain"/>
+      <arg name="vk_clipped" type="uint" summary="clipped (VkBool32) of swapchain"/>
+      <arg name="vk_engine_name" type="string" summary="the application's engine name (VkApplicationInfo::pEngineName), empty if none"/>
+    </request>
+
+    <request name="set_present_mode">
+      <description summary="Communicate the active present mode to the compositor"/>
+      <arg name="vk_present_mode" type="uint" summary="VkPresentModeKHR"/>
+    </request>
+
+    <request name="set_hdr_metadata">
+      <description summary="set HDR metadata for a surface">
+        Forward HDR metadata from Vulkan to the compositor.
+
+        HDR Metadata Infoframe as per CTA 861.G spec.
+
+        display_primary_{red,green,blue}_{x,y} / white_point_{x,y}:
+          Color primaries and white point, coded as unsigned 16-bit values in
+          units of 0.00002 (0xC350 == 1.0).
+
+        max_display_mastering_luminance:
+          Max mastering display luminance in cd/m2 (uint16, 1 cd/m2 units).
+
+        min_display_mastering_luminance:
+          Min mastering display luminance in units of 0.0001 cd/m2.
+
+        max_cll:
+          Max content light level in cd/m2.
+
+        max_fall:
+          Max frame average light level in cd/m2.
+      </description>
+      <arg name="display_primary_red_x" type="uint"/>
+      <arg name="display_primary_red_y" type="uint"/>
+      <arg name="display_primary_green_x" type="uint"/>
+      <arg name="display_primary_green_y" type="uint"/>
+      <arg name="display_primary_blue_x" type="uint"/>
+      <arg name="display_primary_blue_y" type="uint"/>
+      <arg name="white_point_x" type="uint"/>
+      <arg name="white_point_y" type="uint"/>
+      <arg name="max_display_mastering_luminance" type="uint"/>
+      <arg name="min_display_mastering_luminance" type="uint"/>
+      <arg name="max_cll" type="uint"/>
+      <arg name="max_fall" type="uint"/>
+    </request>
+
+    <request name="set_present_time">
+      <description summary="display timing of next commit">
+        Sets the desired presentation time for the next commit (CLOCK_MONOTONIC).
+        Resets to 0 after commit.
+      </description>
+      <arg name="present_id" type="uint" summary="application-provided presentation id"/>
+      <arg name="desired_present_time_hi" type="uint" summary="high 32 bits of desired present time (ns)"/>
+      <arg name="desired_present_time_lo" type="uint" summary="low 32 bits of desired present time (ns)"/>
+    </request>
+
+    <event name="past_present_timing">
+      <description summary="information about past presentation timing"/>
+      <arg name="present_id" type="uint"/>
+      <arg name="desired_present_time_hi" type="uint"/>
+      <arg name="desired_present_time_lo" type="uint"/>
+      <arg name="actual_present_time_hi" type="uint"/>
+      <arg name="actual_present_time_lo" type="uint"/>
+      <arg name="earliest_present_time_hi" type="uint"/>
+      <arg name="earliest_present_time_lo" type="uint"/>
+      <arg name="present_margin_hi" type="uint"/>
+      <arg name="present_margin_lo" type="uint"/>
+    </event>
+
+    <event name="refresh_cycle">
+      <description summary="compositor refresh cycle for this swapchain">
+        Fired when the compositor's refresh period changes.
+      </description>
+      <arg name="refresh_cycle_hi" type="uint" summary="high 32 bits of refresh cycle in nanoseconds"/>
+      <arg name="refresh_cycle_lo" type="uint" summary="low 32 bits of refresh cycle in nanoseconds"/>
+    </event>
+
+    <event name="frame_ready">
+      <description summary="the compositor can take the next frame in time">
+        Sent at a compositor tick for a swapchain whose present mode is FIFO
+        (set_present_mode, 2), when no commit of the swapchain's surface is
+        held waiting for a tick: a frame the application starts now, and
+        presents when done, is taken at the next tick at the latest, without
+        queueing behind others.
+
+        A layer may use it to start the application's next frame no earlier
+        than that, instead of letting it render ahead of the display, which
+        only adds latency. It must not wait for it forever: the event only
+        comes while the compositor is ticking for the surface.
+      </description>
+    </event>
+
+    <event name="retired">
+      <description summary="swapchain was remotely retired by the compositor"></description>
+    </event>
+  </interface>
+</protocol>

@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/ferriscope-core", "crates/ferriscope", "crates/ferriscope-wsi"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+license = "BSD-2-Clause"
+repository = "https://github.com/hgaiser/ferriscope"
+
+[workspace.dependencies]
+ferriscope-core = { path = "crates/ferriscope-core" }
+
+# Command-line parsing.
+clap = { version = "4.6.1", features = ["derive"] }
+# Core library errors: exhaustive, typed, no allocation on the happy path.
+thiserror = "2.0"
+# Logging.
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+
+# Compositor foundation (replaces the wlroots fork gamescope is built on).
+# Pinned to a git revision: the APIs used here are not in a release yet.
+#
+# Feature set is trimmed to the sink path: a Wayland compositor with
+# one GL renderer and a GBM/dmabuf allocator. `backend_gbm` implies `backend_drm`.
+# No DRM/udev/seat/libinput backends, no Vulkan, no multi-GPU renderer.
+smithay = { git = "https://github.com/Smithay/smithay", rev = "0ff00983b6007257a7a161a4fe8b14a778e2ac8f", default-features = false, features = [
+	"backend_egl",
+	"backend_gbm",
+	"renderer_gl",
+	"desktop",
+	"wayland_frontend",
+	"xwayland",
+	"x11rb_event_source",
+] }
+
+[workspace.lints.rust]
+dead_code = "deny"
