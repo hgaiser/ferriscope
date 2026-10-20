@@ -48,7 +48,7 @@ use ash::vk::Handle as _;
 use dispatch::*;
 
 /// The protocol bindings generated inline by wayland-scanner from
-/// `../ferriscope/protocol/ferriscope-swapchain-v1.xml`.
+/// `../protocol/ferriscope-swapchain-v1.xml`.
 pub(crate) mod proto {
 	// `use wayland_client;` puts `wayland_client` in this module's namespace
 	// so the generated sub-modules can reference it via `super::wayland_client`.
@@ -58,11 +58,11 @@ pub(crate) mod proto {
 
 	pub mod __interfaces {
 		use wayland_client::protocol::__interfaces::*;
-		wayland_scanner::generate_interfaces!("../ferriscope/protocol/ferriscope-swapchain-v1.xml");
+		wayland_scanner::generate_interfaces!("../protocol/ferriscope-swapchain-v1.xml");
 	}
 	use self::__interfaces::*;
 
-	wayland_scanner::generate_client_code!("../ferriscope/protocol/ferriscope-swapchain-v1.xml");
+	wayland_scanner::generate_client_code!("../protocol/ferriscope-swapchain-v1.xml");
 }
 
 // ---------------------------------------------------------------------------
