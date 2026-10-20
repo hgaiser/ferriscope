@@ -69,7 +69,7 @@ impl FerriscopeState {
 			return wanted;
 		}
 		let format = match wanted {
-			ContentKind::Sdr => Some(self.sdr_format),
+			ContentKind::Sdr => Some(self.sdr_format.clone()),
 			hdr => pick_hdr_format(&self.renderer, hdr),
 		};
 		let Some(format) = format else {
@@ -79,7 +79,7 @@ impl FerriscopeState {
 			}
 			return self.output_encoding;
 		};
-		tracing::info!(from = ?self.output_encoding, to = ?wanted, format = ?format.0, "output encoding changed");
+		tracing::info!(from = ?self.output_encoding, to = ?wanted, format = ?format.code, "output encoding changed");
 		self.render_format = format;
 		self.output_encoding = wanted;
 		self.reset_pool_buffers();

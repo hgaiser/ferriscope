@@ -276,7 +276,7 @@ mod gpu_tests {
 	use smithay::{
 		backend::{
 			allocator::{
-				Allocator, Fourcc, Modifier,
+				Allocator, Fourcc,
 				dmabuf::{AsDmabuf, Dmabuf},
 				gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
 			},
@@ -290,6 +290,7 @@ mod gpu_tests {
 	};
 
 	use super::*;
+	use crate::shell::render::elements::RenderFormat;
 
 	const SIZE: i32 = 8;
 
@@ -306,9 +307,9 @@ mod gpu_tests {
 		(renderer, GbmAllocator::new(gbm, GbmBufferFlags::RENDERING))
 	}
 
-	fn target(allocator: &mut GbmAllocator<Arc<std::fs::File>>, fourcc: Fourcc, modifier: Modifier) -> Dmabuf {
+	fn target(allocator: &mut GbmAllocator<Arc<std::fs::File>>, format: &RenderFormat) -> Dmabuf {
 		allocator
-			.create_buffer(SIZE as u32, SIZE as u32, fourcc, &[modifier])
+			.create_buffer(SIZE as u32, SIZE as u32, format.code, &format.modifiers)
 			.expect("allocate the target")
 			.export()
 			.expect("export the target")
@@ -329,9 +330,9 @@ mod gpu_tests {
 			)
 			.expect("import the texture");
 
-		let (fourcc, modifier) =
+		let format =
 			crate::shell::render::elements::pick_hdr_format(&renderer, output).expect("a renderable HDR format");
-		let mut dmabuf = target(&mut allocator, fourcc, modifier);
+		let mut dmabuf = target(&mut allocator, &format);
 		{
 			let mut bound = renderer.bind(&mut dmabuf).expect("bind the target");
 			let size = Size::<i32, smithay::utils::Physical>::from((SIZE, SIZE));
@@ -363,7 +364,7 @@ mod gpu_tests {
 				gl.GenFramebuffers(1, &mut fbo);
 				gl.BindFramebuffer(ffi::FRAMEBUFFER, fbo);
 				gl.FramebufferTexture2D(ffi::FRAMEBUFFER, ffi::COLOR_ATTACHMENT0, ffi::TEXTURE_2D, id, 0);
-				match fourcc {
+				match format.code {
 					Fourcc::Abgr2101010 => {
 						let mut words = vec![0u32; (SIZE * SIZE) as usize];
 						gl.ReadPixels(

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use smithay::{
 	backend::{
-		allocator::{Fourcc, Modifier, dmabuf::Dmabuf},
+		allocator::{Format, Fourcc, Modifier, dmabuf::Dmabuf, format::FormatSet},
 		renderer::{
 			Bind, Color32F,
 			element::{
@@ -47,35 +47,65 @@ pub(in crate::shell) fn window_surface_ids(root: &WlSurface, ids: &mut HashSet<I
 	);
 }
 
-/// Pick a `(format, modifier)` pair the renderer can render into as a DMA-BUF.
-pub(in crate::shell) fn pick_render_format(renderer: &GlesRenderer) -> Result<(Fourcc, Modifier)> {
+/// A pool buffer format: a fourcc and every modifier the renderer can render
+/// into with it.
+///
+/// The allocator gets the whole list and the driver picks per allocation. A
+/// modifier can be renderable yet not allocatable at every size: on AMD GFX10
+/// and GFX11, DCC without independent 64B blocks is limited to 2560x2560, and
+/// it is the driver's first choice, so pinning one modifier fails every
+/// allocation above 1440p.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::shell) struct RenderFormat {
+	pub(in crate::shell) code: Fourcc,
+	/// The explicit modifiers in the driver's order of preference, or only
+	/// [`Modifier::Invalid`] (implicit layout) if the driver lists none.
+	pub(in crate::shell) modifiers: Vec<Modifier>,
+}
+
+impl RenderFormat {
+	/// `code` with its renderable modifiers from `set`, if it has any.
+	fn from_set(set: &FormatSet, code: Fourcc) -> Option<Self> {
+		let mut modifiers: Vec<Modifier> = set
+			.iter()
+			.filter(|format| format.code == code && format.modifier != Modifier::Invalid)
+			.map(|format| format.modifier)
+			.collect();
+		if modifiers.is_empty() {
+			if !set.contains(&Format {
+				code,
+				modifier: Modifier::Invalid,
+			}) {
+				return None;
+			}
+			modifiers.push(Modifier::Invalid);
+		}
+		Some(Self { code, modifiers })
+	}
+}
+
+/// Pick a format the renderer can render into as a DMA-BUF.
+pub(in crate::shell) fn pick_render_format(renderer: &GlesRenderer) -> Result<RenderFormat> {
 	let set = <GlesRenderer as Bind<Dmabuf>>::supported_formats(renderer)
 		.ok_or_else(|| Error::Gpu("renderer exposes no dmabuf render formats".into()))?;
-	for code in [Fourcc::Abgr8888, Fourcc::Argb8888, Fourcc::Xrgb8888] {
-		if let Some(format) = set.iter().find(|format| format.code == code) {
-			return Ok((format.code, format.modifier));
-		}
-	}
-	set.iter()
-		.next()
-		.map(|format| (format.code, format.modifier))
+	[Fourcc::Abgr8888, Fourcc::Argb8888, Fourcc::Xrgb8888]
+		.into_iter()
+		.chain(set.iter().next().map(|format| format.code))
+		.find_map(|code| RenderFormat::from_set(&set, code))
 		.ok_or_else(|| Error::Gpu("dmabuf render format set is empty".into()))
 }
 
 /// The render target format for HDR output of `kind`, if the renderer can draw
 /// into one: 10-bit for PQ, FP16 for scRGB (ABGR/XBGR 2101010 and 16161616F),
 /// layouts a Vulkan video encoder can import.
-pub(in crate::shell) fn pick_hdr_format(renderer: &GlesRenderer, kind: ContentKind) -> Option<(Fourcc, Modifier)> {
+pub(in crate::shell) fn pick_hdr_format(renderer: &GlesRenderer, kind: ContentKind) -> Option<RenderFormat> {
 	let codes = match kind {
 		ContentKind::Sdr => return None,
 		ContentKind::Pq => [Fourcc::Abgr2101010, Fourcc::Xbgr2101010],
 		ContentKind::ScRgb => [Fourcc::Abgr16161616f, Fourcc::Xbgr16161616f],
 	};
 	let set = <GlesRenderer as Bind<Dmabuf>>::supported_formats(renderer)?;
-	codes
-		.into_iter()
-		.find_map(|code| set.iter().find(|format| format.code == code))
-		.map(|format| (format.code, format.modifier))
+	codes.into_iter().find_map(|code| RenderFormat::from_set(&set, code))
 }
 
 render_elements! {
@@ -131,5 +161,47 @@ pub(in crate::shell) fn render_into(
 			damage.ages.failed(slot);
 			Err(Error::Render(format!("render_output: {e:?}")))
 		},
+	}
+}
+
+#[cfg(test)]
+mod gpu_tests {
+	use std::sync::Arc;
+
+	use smithay::backend::{
+		allocator::{
+			Allocator,
+			gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
+		},
+		egl::{EGLContext, EGLDisplay},
+	};
+
+	use super::*;
+
+	/// Every picked format allocates above 2560x2560, where AMD GFX10/GFX11
+	/// reject the driver's preferred DCC modifier.
+	#[test]
+	fn picked_formats_allocate_above_1440p() {
+		let file = std::fs::OpenOptions::new()
+			.read(true)
+			.write(true)
+			.open("/dev/dri/renderD128")
+			.expect("open the render node");
+		let gbm = GbmDevice::new(Arc::new(file)).expect("gbm device");
+		let display = unsafe { EGLDisplay::new(gbm.clone()) }.expect("egl display");
+		let context = EGLContext::new(&display).expect("egl context");
+		let renderer = unsafe { GlesRenderer::new(context) }.expect("gles");
+		let mut allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
+
+		let formats = std::iter::once(pick_render_format(&renderer).expect("an SDR format"))
+			.chain(pick_hdr_format(&renderer, ContentKind::Pq))
+			.chain(pick_hdr_format(&renderer, ContentKind::ScRgb));
+		for format in formats {
+			for (width, height) in [(3840, 2160), (3840, 2400), (5120, 2880)] {
+				allocator
+					.create_buffer(width, height, format.code, &format.modifiers)
+					.unwrap_or_else(|e| panic!("allocate {width}x{height} {format:?}: {e}"));
+			}
+		}
 	}
 }

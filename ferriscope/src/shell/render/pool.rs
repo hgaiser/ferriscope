@@ -185,11 +185,23 @@ impl FerriscopeState {
 	/// Allocate a DMA-BUF pool slot on first use.
 	pub(in crate::shell) fn ensure_slot(&mut self, id: usize) -> Result<()> {
 		if self.pool.slots[id].is_none() {
-			let (code, modifier) = self.render_format;
+			let format = &self.render_format;
+			// GBM leaves errno untouched when the driver rejects every modifier,
+			// so `e` can be a stale, unrelated error; log what was asked for.
 			let buffer = self
 				.allocator
-				.create_buffer(self.frame_size.w as u32, self.frame_size.h as u32, code, &[modifier])
-				.map_err(|e| Error::Gpu(format!("allocate dmabuf: {e}")))?;
+				.create_buffer(
+					self.frame_size.w as u32,
+					self.frame_size.h as u32,
+					format.code,
+					&format.modifiers,
+				)
+				.map_err(|e| {
+					Error::Gpu(format!(
+						"allocate {}x{} {:?} dmabuf (modifiers {:?}): {e}",
+						self.frame_size.w, self.frame_size.h, format.code, format.modifiers,
+					))
+				})?;
 			let dmabuf = buffer
 				.export()
 				.map_err(|e| Error::Gpu(format!("export dmabuf: {e:?}")))?;

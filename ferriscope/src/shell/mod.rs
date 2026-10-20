@@ -22,10 +22,7 @@ use std::{
 use smithay::backend::renderer::gles::GlesRenderbuffer;
 use smithay::{
 	backend::{
-		allocator::{
-			Fourcc, Modifier,
-			gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
-		},
+		allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
 		drm::DrmDeviceFd,
 		egl::{EGLContext, EGLDisplay},
 		renderer::{
@@ -103,7 +100,7 @@ use crate::shell::ime::ImeTyper;
 use crate::shell::pen::PenState;
 use crate::shell::render::damage::FrameDamage;
 use crate::shell::render::elements::FrameScratch;
-use crate::shell::render::elements::pick_render_format;
+use crate::shell::render::elements::{RenderFormat, pick_render_format};
 use crate::shell::render::pool::DmabufPool;
 use crate::shell::schedule::Scheduler;
 use crate::shell::touch::TouchState;
@@ -226,11 +223,11 @@ pub struct FerriscopeState {
 
 	renderer: GlesRenderer,
 	allocator: GbmAllocator<Arc<std::fs::File>>,
-	/// The pool's current `(format, modifier)`: the SDR one, or an HDR one
-	/// while the base layer is HDR (see [`Self::select_output_encoding`]).
-	render_format: (Fourcc, Modifier),
+	/// The pool's current format: the SDR one, or an HDR one while the base
+	/// layer is HDR (see [`Self::select_output_encoding`]).
+	render_format: RenderFormat,
 	/// The 8-bit format the pool uses for SDR output.
-	sdr_format: (Fourcc, Modifier),
+	sdr_format: RenderFormat,
 	/// What the pool's buffers hold: SDR, or HDR10 PQ / scRGB when
 	/// [`CompositorConfig::hdr`] is on and the base layer is HDR.
 	output_encoding: ContentKind,
@@ -598,7 +595,7 @@ impl FerriscopeState {
 
 			renderer,
 			allocator,
-			render_format,
+			render_format: render_format.clone(),
 			sdr_format: render_format,
 			output_encoding: ContentKind::Sdr,
 			app_wants_hdr: false,
