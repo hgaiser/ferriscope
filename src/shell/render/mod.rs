@@ -3,6 +3,7 @@
 pub(in crate::shell) mod damage;
 pub(in crate::shell) mod elements;
 pub(in crate::shell) mod hdr_shader;
+pub(in crate::shell) mod passthrough;
 pub(in crate::shell) mod pool;
 
 use std::time::{Duration, Instant};
@@ -97,14 +98,11 @@ impl FerriscopeState {
 
 	/// Render one frame and hand it to the sink.
 	///
-	/// The caller has checked that a pool slot is free. Returns `true` when a
-	/// frame reached the sink (the scene may be marked clean), `false` when the
-	/// sink dropped it or no slot was available (the caller must retry).
-	pub(in crate::shell) fn render_frame(&mut self) -> Result<bool> {
-		Ok(matches!(
-			self.render_frame_inner(Instant::now())?,
-			RenderOutcome::Delivered
-		))
+	/// The caller has checked that a pool slot is free. A delivered frame
+	/// reached the sink (the scene may be marked clean); a skipped one did not
+	/// (the caller must retry).
+	pub(in crate::shell) fn render_frame(&mut self) -> Result<RenderOutcome> {
+		self.render_frame_inner(Instant::now())
 	}
 
 	/// The render body behind [`Self::render_frame`].
@@ -147,7 +145,49 @@ impl FerriscopeState {
 		}
 	}
 
+	/// Deliver the client's own buffer as the frame when the scene is exactly
+	/// that buffer (see [`passthrough`]). `None` means the frame must be
+	/// composited.
+	fn try_passthrough(&mut self, now: Instant) -> Result<Option<RenderOutcome>> {
+		let Some(candidate) = self.passthrough_candidate() else {
+			return Ok(None);
+		};
+		// First, as for a composite: it settles the output encoding.
+		let info = self.frame_info(now);
+		// A borrowed buffer occupies a pool slot like a composited one, so the
+		// consumer's backlog stays bounded by the pool either way.
+		let Some(id) = pick_free_slot(&self.pool.delivered_generation) else {
+			tracing::trace!("no free DMA-BUF slot, skipping frame");
+			return Ok(Some(RenderOutcome::Skipped));
+		};
+		self.cursor.visible = false;
+		let generation = self.pool.next_generation;
+		self.pool.next_generation = self.pool.next_generation.wrapping_add(1);
+		// The client's commit was gated on its acquire point or implicit fences
+		// before it became current, so the buffer is complete.
+		self.sink.submit(Frame {
+			info,
+			data: FrameData::DmaBuf(DmaBufFrame {
+				buffer_id: encode_handle(id, generation),
+				dmabuf: candidate.dmabuf,
+				acquire_fence: None,
+				release: None,
+			}),
+		})?;
+		self.pool.delivered_generation[id] = Some(generation);
+		self.pool.borrowed[id] = Some(candidate.buffer);
+		tracing::trace!(target: "ferriscope::passthrough", slot = id, sequence = self.scheduler.frames_delivered(), "delivered client buffer");
+		// Composited slots no longer match what the damage tracker saw.
+		for slot in 0..self.pool.slots.len() {
+			self.damage.ages.invalidate(slot);
+		}
+		Ok(Some(RenderOutcome::Delivered { zero_copy: true }))
+	}
+
 	fn render_frame_with(&mut self, now: Instant, scratch: &mut FrameScratch) -> Result<RenderOutcome> {
+		if let Some(outcome) = self.try_passthrough(now)? {
+			return Ok(outcome);
+		}
 		#[cfg(feature = "test-support")]
 		let buffer_size = self.frame_size;
 		// First, so the output encoding is settled before elements are built.
@@ -334,7 +374,7 @@ impl FerriscopeState {
 					}),
 				})?;
 				self.pool.delivered_generation[id] = Some(generation);
-				return Ok(RenderOutcome::Delivered);
+				return Ok(RenderOutcome::Delivered { zero_copy: false });
 			}
 
 			// The CPU readback path reads the slot back through the GPU, instead
@@ -377,7 +417,7 @@ impl FerriscopeState {
 						data: pixels,
 					}),
 				})?;
-				return Ok(RenderOutcome::Delivered);
+				return Ok(RenderOutcome::Delivered { zero_copy: false });
 			}
 			#[cfg(not(feature = "test-support"))]
 			unreachable!("a DMA-BUF-only build always hands the pool buffer over");
@@ -432,7 +472,7 @@ impl FerriscopeState {
 			})?;
 			// The pixel path holds no slot: the sink copies the pixels
 			// synchronously.
-			Ok(RenderOutcome::Delivered)
+			Ok(RenderOutcome::Delivered { zero_copy: false })
 		}
 		#[cfg(not(feature = "test-support"))]
 		unreachable!("a DMA-BUF-only build always renders into the pool");
@@ -563,8 +603,9 @@ impl FerriscopeState {
 
 /// What [`FerriscopeState::render_frame_inner`] did with one frame.
 pub(in crate::shell) enum RenderOutcome {
-	/// A frame reached the sink.
-	Delivered,
+	/// A frame reached the sink. `zero_copy` when it is the client's own
+	/// buffer ([`passthrough`]) rather than a composite.
+	Delivered { zero_copy: bool },
 	/// Nothing was handed to the sink (no free pool slot); the caller should
 	/// retry.
 	Skipped,

@@ -242,6 +242,9 @@ pub struct FerriscopeState {
 	/// Whether the missing-HDR-format warning was logged.
 	hdr_format_warned: bool,
 	use_dmabuf: bool,
+	/// The last passthrough decision (`Some(None)` is passthrough), so only
+	/// changes are logged (see [`render::passthrough`]).
+	passthrough_blocker: Option<Option<render::passthrough::Blocker>>,
 	/// Exit after this many delivered frames.
 	stop_after_frames: Option<u64>,
 	/// The directory the Wayland socket lives in.
@@ -603,6 +606,7 @@ impl FerriscopeState {
 			sdr_program,
 			hdr_format_warned: false,
 			use_dmabuf,
+			passthrough_blocker: None,
 			stop_after_frames,
 			runtime_dir,
 			pool: DmabufPool::new(pool_size),
