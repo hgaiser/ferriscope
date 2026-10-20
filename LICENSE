@@ -27,5 +27,5 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ========================================================
 
-The Wayland protocol files in crates/ferriscope-core/protocol/ carry their own
+The Wayland protocol files in ferriscope/protocol/ carry their own
 copyright notices and license (MIT) in their headers.

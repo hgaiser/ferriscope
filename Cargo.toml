@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ferriscope-core", "crates/ferriscope", "crates/ferriscope-wsi"]
+members = ["ferriscope", "ferriscope-wsi"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,7 +10,6 @@ license = "BSD-2-Clause"
 repository = "https://github.com/hgaiser/ferriscope"
 
 [workspace.dependencies]
-ferriscope-core = { path = "crates/ferriscope-core" }
 
 # Command-line parsing.
 clap = { version = "4.6.1", features = ["derive"] }

@@ -363,18 +363,9 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 name = "ferriscope"
 version = "0.1.0"
 dependencies = [
- "clap",
- "ferriscope-core",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "ferriscope-core"
-version = "0.1.0"
-dependencies = [
  "bitflags",
- "ferriscope-core",
+ "clap",
+ "ferriscope",
  "smithay",
  "thiserror",
  "tracing",

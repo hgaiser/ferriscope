@@ -15,9 +15,8 @@ There is no display, no modeset and no scanout, and no vblank. The session rate
 
 | Crate | Contents |
 |---|---|
-| `crates/ferriscope-core` | The library: compositor, frame delivery, focus, Steam, Wayland and X11 handlers. |
-| `crates/ferriscope` | The `ferriscope` binary: command line, logging and wiring around the library. |
-| `crates/ferriscope-wsi` | The Vulkan WSI layer `VK_LAYER_FERRISCOPE_wsi` (x86_64). |
+| `ferriscope` | The library (compositor, frame delivery, focus, Steam, Wayland and X11 handlers) and the thin `ferriscope` binary (command line and logging). Embedders use `default-features = false` to skip the binary's dependencies. |
+| `ferriscope-wsi` | The Vulkan WSI layer `VK_LAYER_FERRISCOPE_wsi` (x86_64). |
 
 ## Features
 
@@ -60,7 +59,7 @@ The integration suite needs a GPU, Xwayland and the DRM render node. It is
 `#[ignore]`d, so run it explicitly:
 
 ```sh
-cargo test -p ferriscope-core --no-fail-fast -- --ignored --test-threads=1
+cargo test -p ferriscope --no-fail-fast -- --ignored --test-threads=1
 ```
 
 Minimum Rust version 1.87.
@@ -74,7 +73,7 @@ tools/install-wsi.sh --prefix /usr         # run as yourself; sudo is used only 
 ## Library use
 
 ```rust
-use ferriscope_core::{ChannelOutput, Compositor, CompositorConfig, FrameOutput};
+use ferriscope::{ChannelOutput, Compositor, CompositorConfig, FrameOutput};
 
 let config = CompositorConfig {
     width: 1920,
@@ -91,7 +90,7 @@ let ready = handles.ready.recv().expect("compositor ready");
 
 `Compositor::launch` runs the compositor on its own thread and returns the
 producer handle and the consumer endpoints (`CompositorHandles`).
-`ferriscope_core::run(config)` is the standalone form. Every frame is composited
+`ferriscope::run(config)` is the standalone form. Every frame is composited
 to RGB, and `handles.frames` keeps only the newest undelivered one.
 The `test-support` feature (CPU PPM recorder, control socket) is enabled by the
 binary and the tests; embedders leave it off.
