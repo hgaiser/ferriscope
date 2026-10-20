@@ -50,14 +50,17 @@ impl FerriscopeState {
 		)
 		.map_err(|e| Error::Xwayland(format!("spawn: {e:?}")))?;
 
-		let display_handle = self.display_handle.clone();
-		let loop_handle = self.loop_handle.clone();
 		self.loop_handle
 			.insert_source(xwayland, move |event, _, state: &mut Self| match event {
 				XWaylandEvent::Ready {
 					x11_socket,
 					display_number,
-				} => match X11Wm::start_wm(loop_handle.clone(), &display_handle, x11_socket, client.clone()) {
+				} => match X11Wm::start_wm(
+					state.loop_handle.clone(),
+					&state.display_handle,
+					x11_socket,
+					client.clone(),
+				) {
 					Ok(wm) => {
 						tracing::info!(display_number, "Xwayland ready");
 						state.xwm = Some(wm);
@@ -71,7 +74,7 @@ impl FerriscopeState {
 								// out of the keyboard-focus window from its
 								// `FocusOut` handler (`steamcompmgr.cpp:8602`).
 								if let Some(fd) = atoms.duplicate_fd() {
-									if let Err(e) = loop_handle.insert_source(
+									if let Err(e) = state.loop_handle.insert_source(
 										Generic::new(fd, Interest::READ, Mode::Level),
 										|_, _, state: &mut Self| {
 											state.poll_x11_events();

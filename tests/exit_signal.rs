@@ -90,3 +90,23 @@ fn wait_returns_when_the_hosted_command_exits() {
 		.expect("wait observed the hosted command exiting");
 	assert!(result.is_ok(), "the compositor reported {result:?}");
 }
+
+/// Stopping a compositor that hosts Xwayland frees its Wayland socket, so an
+/// embedder that runs one compositor after another does not run out of names.
+#[test]
+#[ignore = "requires a GPU render node and Xwayland"]
+fn stopping_an_xwayland_compositor_releases_its_wayland_socket() {
+	let config = CompositorConfig {
+		width: WIDTH,
+		height: HEIGHT,
+		xwayland: true,
+		..CompositorConfig::default()
+	};
+	let (compositor, handles) = Compositor::launch(config).expect("launch compositor");
+	let ready = handles.ready.recv_timeout(READY_TIMEOUT).expect("ready handshake");
+	let socket = ready.runtime_dir.join(&ready.wayland_display);
+	assert!(socket.exists(), "no Wayland socket at {}", socket.display());
+
+	compositor.stop().expect("stop");
+	assert!(!socket.exists(), "{} outlived the compositor", socket.display());
+}
