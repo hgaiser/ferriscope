@@ -36,7 +36,14 @@ impl FerriscopeState {
 		let (xwayland, client) = XWayland::spawn(
 			&self.display_handle,
 			None,
-			std::iter::empty::<(String, String)>(),
+			// smithay clears Xwayland's environment except PATH and
+			// XDG_RUNTIME_DIR, which drops the variables that let it find a GPU
+			// driver installed outside the default paths (LD_LIBRARY_PATH,
+			// __EGL_VENDOR_LIBRARY_DIRS, ...); without them it has no hardware
+			// GLX. Hand back the compositor's own environment. These are applied
+			// after smithay's WAYLAND_SOCKET, so an inherited one must not
+			// replace it.
+			std::env::vars_os().filter(|(key, _)| key != "WAYLAND_SOCKET"),
 			// gamescope sets `force_xrandr_emulation` (`wlserver.cpp:1878`), so a
 			// client can pick an emulated mode and is scaled to the output. It
 			// also turns touch pointer emulation off (`g_bNoTouchPointerEmulation`,
