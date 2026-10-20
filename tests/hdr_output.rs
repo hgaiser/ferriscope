@@ -877,7 +877,7 @@ fn nothing_changes_when_hdr_is_not_enabled() {
 
 #[test]
 #[ignore = "requires GPU"]
-fn an_hdr_game_dmabuf_is_composited_with_its_metadata() {
+fn an_hdr_game_dmabuf_is_passed_through_with_its_metadata() {
 	let session = Session::start(true);
 	let mut reader = Reader::new();
 	let mut client = session.client();
@@ -885,11 +885,17 @@ fn an_hdr_game_dmabuf_is_composited_with_its_metadata() {
 	let buffer = dmabuf_cleared_to(&mut reader.renderer, unorm10(512, 256, 768));
 	client.present_dmabuf(&buffer);
 
-	// The client's buffer is composited into the 10-bit PQ pool unchanged.
-	let (colour, frame) = session.frame_where(|dmabuf| dmabuf.dmabuf.format().code == Fourcc::Abgr2101010);
+	// The buffer is opaque, output-sized and alone, so the client's own buffer
+	// is delivered (its format, not the pool's), with no composite to wait on.
+	let (colour, frame) = session.frame_where(|dmabuf| dmabuf.dmabuf.format().code == Fourcc::Xbgr2101010);
+	assert!(
+		frame.acquire_fence.is_none(),
+		"a passed-through frame has no composite to fence"
+	);
+	// GLES reads an alpha-less 10-bit framebuffer back as 8-bit only.
 	let centre = pixel(&reader.read(&frame), WIDTH as usize / 2, HEIGHT as usize / 2);
 	assert!(
-		close(centre, unorm10(512, 256, 768), 0.001),
+		close(centre, unorm10(512, 256, 768), 1.0 / 255.0),
 		"centre pixel is {centre:?}"
 	);
 	assert_eq!(colour.transfer, TransferFunction::Pq);

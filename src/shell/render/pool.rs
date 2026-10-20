@@ -16,7 +16,7 @@ use smithay::{
 			Allocator,
 			dmabuf::{AsDmabuf, Dmabuf},
 		},
-		renderer::{Renderer, gles::GlesRenderer, sync::SyncPoint},
+		renderer::{Renderer, gles::GlesRenderer, sync::SyncPoint, utils::Buffer},
 	},
 	reexports::calloop::{Interest, Mode, PostAction, RegistrationToken, generic::Generic},
 };
@@ -34,6 +34,10 @@ pub(in crate::shell) struct DmabufPool {
 	/// Lazily-allocated DMA-BUF pool slots, indexed by the slot part of a
 	/// buffer handle.
 	pub(in crate::shell) slots: Vec<Option<Dmabuf>>,
+	/// The client buffer a slot lends to the consumer instead of its own pool
+	/// buffer (zero-copy passthrough). Dropping it releases the client's
+	/// buffer, so it is cleared only when the slot is freed.
+	pub(in crate::shell) borrowed: Vec<Option<Buffer>>,
 	/// Delivery generation currently held by the consumer for each slot.
 	///
 	/// `Some(generation)` means the slot is busy with that delivery; a
@@ -58,6 +62,7 @@ impl DmabufPool {
 	pub(in crate::shell) fn new(size: usize) -> Self {
 		Self {
 			slots: (0..size).map(|_| None).collect(),
+			borrowed: (0..size).map(|_| None).collect(),
 			delivered_generation: vec![None; size],
 			fence_source: vec![None; size],
 			fence_since: vec![None; size],
@@ -136,6 +141,7 @@ impl FerriscopeState {
 	/// Mark a pool slot free and clear any release-fence bookkeeping.
 	pub(in crate::shell) fn free_slot(&mut self, slot: usize) {
 		self.pool.delivered_generation[slot] = None;
+		self.pool.borrowed[slot] = None;
 		self.pool.fence_since[slot] = None;
 		self.pool.fence_warned[slot] = false;
 	}

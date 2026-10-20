@@ -36,7 +36,7 @@ use smithay::{
 	utils::IsAlive,
 };
 
-use crate::shell::FerriscopeState;
+use crate::shell::{FerriscopeState, render::RenderOutcome};
 
 /// How long a static screen is re-composited as a keepalive.
 ///
@@ -368,7 +368,7 @@ impl FerriscopeState {
 			if self.scheduler.should_render(scene, slot_free, now) {
 				let render_started = Instant::now();
 				match self.render_frame() {
-					Ok(true) => {
+					Ok(RenderOutcome::Delivered { zero_copy }) => {
 						let delivery = self.scheduler.delivered(scene, now);
 						// Latency tooling: `sequence` is the delivered frame's
 						// `FrameInfo::sequence`.
@@ -379,7 +379,7 @@ impl FerriscopeState {
 						);
 						// The frame is with the consumer now: that is when
 						// its commits count as presented.
-						self.send_presentation_feedback(self.scheduler.frames_delivered() - 1);
+						self.send_presentation_feedback(self.scheduler.frames_delivered() - 1, zero_copy);
 						tracing::trace!(
 							target: "ferriscope::cadence",
 							commit_to_delivery_us = delivery.commit_to_delivery.map(|d| d.as_micros() as u64),
@@ -391,7 +391,7 @@ impl FerriscopeState {
 						);
 					},
 					// No pool slot was free; the scene is still dirty.
-					Ok(false) => {
+					Ok(RenderOutcome::Skipped) => {
 						tracing::trace!(target: "ferriscope::cadence", "no free slot; retrying");
 						self.scheduler.deferred(now);
 					},

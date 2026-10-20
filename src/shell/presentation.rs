@@ -26,7 +26,8 @@
 //!
 //! The reported refresh is the session interval and the sequence is the
 //! delivered frame's sequence number. There is no vblank, so `VSYNC` is never
-//! set, and every frame is composited, so `ZERO_COPY` is never set either.
+//! set. `ZERO_COPY` is set for a frame that is the client's own buffer
+//! (passthrough, `render/passthrough.rs`).
 
 use smithay::{
 	desktop::utils::{OutputPresentationFeedback, take_presentation_feedback_surface_tree},
@@ -45,12 +46,13 @@ impl FerriscopeState {
 	/// Answer the presentation feedback of every committed surface: the frame
 	/// with `sequence` was handed to the sink just now.
 	///
-	/// No `presented` flags: no display (`VSYNC`, `HW_CLOCK`) is involved and
-	/// every frame is composited (no `ZERO_COPY`).
-	pub(in crate::shell) fn send_presentation_feedback(&mut self, sequence: u64) {
+	/// No display is involved, so `VSYNC` and `HW_CLOCK` are never set.
+	/// `zero_copy` marks a frame that is the client's own buffer: the windows'
+	/// feedback reports `ZERO_COPY` (only the passed-through window is drawn).
+	pub(in crate::shell) fn send_presentation_feedback(&mut self, sequence: u64, zero_copy: bool) {
 		let now = Clock::<Monotonic>::new().now();
 		let output = self.output.clone();
-		let flags = Kind::empty();
+		let flags = if zero_copy { Kind::ZeroCopy } else { Kind::empty() };
 		let mut feedback = OutputPresentationFeedback::new(&output);
 		for window in self.windows.windows() {
 			window.take_presentation_feedback(&mut feedback, |_, _| Some(output.clone()), |_, _| flags);
@@ -65,7 +67,12 @@ impl FerriscopeState {
 			}
 		}
 		if let Some((surface, _)) = self.cursor_render_target() {
-			take_presentation_feedback_surface_tree(&surface, &mut feedback, |_, _| Some(output.clone()), |_, _| flags);
+			take_presentation_feedback_surface_tree(
+				&surface,
+				&mut feedback,
+				|_, _| Some(output.clone()),
+				|_, _| Kind::empty(),
+			);
 		}
 		feedback.presented::<_, Monotonic>(now, Refresh::Fixed(self.scheduler.interval()), sequence, Kind::empty());
 	}

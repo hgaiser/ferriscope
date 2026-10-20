@@ -90,8 +90,10 @@ let ready = handles.ready.recv().expect("compositor ready");
 
 `Compositor::launch` runs the compositor on its own thread and returns the
 producer handle and the consumer endpoints (`CompositorHandles`).
-`ferriscope::run(config)` is the standalone form. Every frame is composited
-to RGB, and `handles.frames` keeps only the newest undelivered one.
+`ferriscope::run(config)` is the standalone form. Frames are composited to
+RGB, except that a lone opaque, output-sized client DMA-BUF with nothing drawn
+over it is handed over as-is (zero-copy passthrough). `handles.frames` keeps
+only the newest undelivered one.
 The `test-support` feature (CPU PPM recorder, control socket) is enabled by the
 binary and the tests; embedders leave it off.
 

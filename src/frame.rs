@@ -81,14 +81,16 @@ pub struct DmaBufFrame {
 	///
 	/// The slot stays held until the frame is dropped.
 	pub buffer_id: u64,
-	/// The composited buffer.
+	/// The composited buffer, or the client's own buffer when it is passed
+	/// through unchanged. Its format and modifier may change between frames.
 	pub dmabuf: Dmabuf,
 	/// Fence the consumer waits on before reading the buffer.
 	///
-	/// `None` reliably means the render was already complete when the frame was
+	/// `None` reliably means the buffer was already complete when the frame was
 	/// handed over: if `SyncPoint::export` could not provide a native fence but
 	/// the GPU work was still in flight, the compositor waits for completion
-	/// before handing the frame off.
+	/// before handing the frame off. A passed-through client buffer has none:
+	/// its commit was applied only once the client's rendering had finished.
 	pub acquire_fence: Option<OwnedFd>,
 	/// Returns the slot when the frame is dropped; installed by the delivering
 	/// sink. Private by design.
