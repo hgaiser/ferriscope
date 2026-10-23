@@ -145,7 +145,9 @@ impl Trigger {
 	pub fn from_wire(keysyms: &[u8]) -> Self {
 		Self::from_keysyms(
 			keysyms
-				.chunks_exact(4)
+				.as_chunks::<4>()
+				.0
+				.iter()
 				.map(|chunk| u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])),
 		)
 	}

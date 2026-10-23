@@ -23,9 +23,7 @@ use std::{
 	time::{Duration, Instant},
 };
 
-use ferriscope::{
-	Compositor, CompositorConfig, CompositorHandles, DmaBufFrame, Frame, FrameData, RecvTimeoutError,
-};
+use ferriscope::{Compositor, CompositorConfig, CompositorHandles, DmaBufFrame, Frame, FrameData, RecvTimeoutError};
 
 /// Output width, small enough that a software-render fallback still keeps up.
 const WIDTH: u32 = 320;

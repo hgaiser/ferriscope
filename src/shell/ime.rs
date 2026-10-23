@@ -156,12 +156,12 @@ impl FerriscopeState {
 		self.ime_flush_text();
 		// A single character the seat keymap can type needs no keymap switch
 		// (and none while a temporary keymap is still installed).
-		if self.ime.keys.is_empty() && text.len() == 1 {
-			if let Some(keysym) = text.chars().next().and_then(keysym_from_char) {
-				if self.ime_type_default(keysym) {
-					return;
-				}
-			}
+		if self.ime.keys.is_empty()
+			&& text.len() == 1
+			&& let Some(keysym) = text.chars().next().and_then(keysym_from_char)
+			&& self.ime_type_default(keysym)
+		{
+			return;
 		}
 		self.ime_type_temporary(text);
 	}

@@ -249,10 +249,11 @@ impl WindowMeta {
 		// control-parent window that is not an app window is a dropdown.
 		let valid_layered = WS_EX_CONTROLPARENT | WS_EX_LAYERED;
 		let invalid_layered = WS_EX_APPWINDOW;
-		if let Some(ex) = self.hwnd_style_ex {
-			if ex & valid_layered == valid_layered && ex & invalid_layered == 0 {
-				return true;
-			}
+		if let Some(ex) = self.hwnd_style_ex
+			&& ex & valid_layered == valid_layered
+			&& ex & invalid_layered == 0
+		{
+			return true;
 		}
 
 		// :4016 Forza Horizon 4 and 5 black background window.
@@ -541,41 +542,41 @@ fn pick_primary_focus_and_override(
 	}
 
 	// :4357
-	if let Some(mut current) = focus {
-		if current.is_xwayland() {
-			// :4361 follow transient links for the focus window itself.
-			if control.window.is_none() && !win_treat_as_per_window(current, strategy) {
-				for _ in 0..=possible.len() {
-					let next = possible.iter().copied().find(|candidate| {
-						candidate.is_xwayland()
-							&& candidate.id != current.id
-							&& candidate.transient_for == Some(current.id)
-							&& !candidate.maybe_dropdown()
-					});
-					match next {
-						Some(candidate) => current = candidate,
-						None => break,
-					}
+	if let Some(mut current) = focus
+		&& current.is_xwayland()
+	{
+		// :4361 follow transient links for the focus window itself.
+		if control.window.is_none() && !win_treat_as_per_window(current, strategy) {
+			for _ in 0..=possible.len() {
+				let next = possible.iter().copied().find(|candidate| {
+					candidate.is_xwayland()
+						&& candidate.id != current.id
+						&& candidate.transient_for == Some(current.id)
+						&& !candidate.maybe_dropdown()
+				});
+				match next {
+					Some(candidate) => current = candidate,
+					None => break,
 				}
-				focus = Some(current);
 			}
+			focus = Some(current);
+		}
 
-			// :4375 pick an override-redirect window as the override.
-			if override_focus.is_none() {
-				if !control.app_ids.is_empty() {
-					override_focus = possible.iter().copied().find(|window| {
-						window.is_override_redirect()
-							&& is_good_override_candidate(window, current)
-							&& window.app_id == current.app_id
-					});
-				} else if !possible.is_empty() {
-					override_focus = possible
-						.iter()
-						.copied()
-						.find(|window| window.is_override_redirect() && is_good_override_candidate(window, current));
-				}
-				resolve_transient_overrides(possible, current, &mut override_focus, false);
+		// :4375 pick an override-redirect window as the override.
+		if override_focus.is_none() {
+			if !control.app_ids.is_empty() {
+				override_focus = possible.iter().copied().find(|window| {
+					window.is_override_redirect()
+						&& is_good_override_candidate(window, current)
+						&& window.app_id == current.app_id
+				});
+			} else if !possible.is_empty() {
+				override_focus = possible
+					.iter()
+					.copied()
+					.find(|window| window.is_override_redirect() && is_good_override_candidate(window, current));
 			}
+			resolve_transient_overrides(possible, current, &mut override_focus, false);
 		}
 	}
 
@@ -600,45 +601,44 @@ fn pick_primary_focus_and_override(
 	}
 
 	// :4420 fall back to a dropdown that is not override-redirect.
-	if override_focus.is_none() {
-		if let Some(focus) = focus {
-			if controlled_focus {
-				// :4424
-				'apps: for app_id in &control.app_ids {
-					for fake_override in possible {
-						if fake_override.app_id == *app_id
-							&& fake_override.maybe_dropdown()
-							&& is_good_override_candidate(fake_override, focus)
-							&& fake_override.app_id == focus.app_id
-						{
-							override_focus = Some(fake_override);
-							break 'apps;
-						}
+	if override_focus.is_none()
+		&& let Some(focus) = focus
+	{
+		if controlled_focus {
+			// :4424
+			'apps: for app_id in &control.app_ids {
+				for fake_override in possible {
+					if fake_override.app_id == *app_id
+						&& fake_override.maybe_dropdown()
+						&& is_good_override_candidate(fake_override, focus)
+						&& fake_override.app_id == focus.app_id
+					{
+						override_focus = Some(fake_override);
+						break 'apps;
 					}
 				}
-			} else {
-				// :4440
-				override_focus = possible.iter().copied().find(|fake_override| {
-					fake_override.maybe_dropdown() && is_good_override_candidate(fake_override, focus)
-				});
 			}
-			resolve_transient_overrides(possible, focus, &mut override_focus, true);
+		} else {
+			// :4440
+			override_focus = possible.iter().copied().find(|fake_override| {
+				fake_override.maybe_dropdown() && is_good_override_candidate(fake_override, focus)
+			});
 		}
+		resolve_transient_overrides(possible, focus, &mut override_focus, true);
 	}
 
 	// ferriscope extension (native Wayland only; gamescope has no XDG
 	// override concept): a toplevel parented to the focus window is drawn over
 	// it and takes the keyboard, as `xdg_toplevel.set_parent` dialogs always
 	// have here. Pinned by `wayland_transient_takes_focus`.
-	if override_focus.is_none() {
-		if let Some(focus) = focus {
-			if !focus.is_xwayland() {
-				override_focus = possible
-					.iter()
-					.copied()
-					.find(|window| !window.is_xwayland() && window.transient_for == Some(focus.id));
-			}
-		}
+	if override_focus.is_none()
+		&& let Some(focus) = focus
+		&& !focus.is_xwayland()
+	{
+		override_focus = possible
+			.iter()
+			.copied()
+			.find(|window| !window.is_xwayland() && window.transient_for == Some(focus.id));
 	}
 
 	Primary {

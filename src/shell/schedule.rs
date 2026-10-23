@@ -403,11 +403,11 @@ impl FerriscopeState {
 			}
 		}
 
-		if let Some(max) = self.stop_after_frames {
-			if self.scheduler.frames_delivered() >= max {
-				tracing::info!("reached frame limit ({max}), stopping");
-				self.request_stop();
-			}
+		if let Some(max) = self.stop_after_frames
+			&& self.scheduler.frames_delivered() >= max
+		{
+			tracing::info!("reached frame limit ({max}), stopping");
+			self.request_stop();
 		}
 
 		let slot_free = self.slot_free();

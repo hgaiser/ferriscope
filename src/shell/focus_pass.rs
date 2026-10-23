@@ -265,10 +265,10 @@ impl FerriscopeState {
 			.into_iter()
 			.flatten()
 		{
-			if let (Some(window), Some(location)) = (self.windows.window(id), self.window_location(id)) {
-				if !desired.iter().any(|(existing, _)| existing == window) {
-					desired.push((window.clone(), location));
-				}
+			if let (Some(window), Some(location)) = (self.windows.window(id), self.window_location(id))
+				&& !desired.iter().any(|(existing, _)| existing == window)
+			{
+				desired.push((window.clone(), location));
 			}
 		}
 		let current: Vec<Window> = self.space.elements().cloned().collect();
@@ -373,10 +373,10 @@ impl FerriscopeState {
 	/// changes (`steamcompmgr.cpp:4591`); the overlay keeps the focus window, so
 	/// the keyboard moving back is the transition ferriscope keys it on.
 	fn take_out_of_iconic(&mut self, id: WindowId) {
-		if self.focus.iconified.remove(&id) {
-			if let Some(steam) = self.steam.as_ref() {
-				steam.set_wm_state(id, IcccmState::Normal);
-			}
+		if self.focus.iconified.remove(&id)
+			&& let Some(steam) = self.steam.as_ref()
+		{
+			steam.set_wm_state(id, IcccmState::Normal);
 		}
 	}
 
@@ -413,13 +413,13 @@ impl FerriscopeState {
 		if let Some(id) = picked.global.keyboard_focus {
 			self.take_out_of_iconic(id);
 		}
-		if let Some((_, previous)) = self.focus.keyboard.take() {
-			if let Some(toplevel) = previous.toplevel().filter(|_| previous.alive()) {
-				toplevel.with_pending_state(|state| {
-					state.states.unset(xdg_toplevel::State::Activated);
-				});
-				toplevel.send_configure();
-			}
+		if let Some((_, previous)) = self.focus.keyboard.take()
+			&& let Some(toplevel) = previous.toplevel().filter(|_| previous.alive())
+		{
+			toplevel.with_pending_state(|state| {
+				state.states.unset(xdg_toplevel::State::Activated);
+			});
+			toplevel.send_configure();
 		}
 		match desired {
 			Some((target, window)) => {
@@ -445,10 +445,11 @@ impl FerriscopeState {
 		}
 		// An interactive Steam UI overlay holds input without being the focus
 		// window; size it to the output too.
-		if let (Some(overlay), Some(input)) = (picked.global.overlay, picked.global.input_focus) {
-			if overlay == input && self.steam_ui_fills_output_id(overlay) {
-				self.apply_geometry_to(overlay);
-			}
+		if let (Some(overlay), Some(input)) = (picked.global.overlay, picked.global.input_focus)
+			&& overlay == input
+			&& self.steam_ui_fills_output_id(overlay)
+		{
+			self.apply_geometry_to(overlay);
 		}
 	}
 
@@ -636,14 +637,13 @@ impl FerriscopeState {
 	/// focused-app contract already names the game. The resulting `FocusIn`
 	/// drives `_NET_ACTIVE_WINDOW` through the xwm.
 	pub(in crate::shell) fn force_x11_input_focus(&self, id: WindowId) {
-		if let Some(steam) = self.steam.as_ref() {
-			if self
+		if let Some(steam) = self.steam.as_ref()
+			&& self
 				.windows
 				.window(id)
 				.is_some_and(|window| window.x11_surface().is_some())
-			{
-				steam.set_input_focus(id);
-			}
+		{
+			steam.set_input_focus(id);
 		}
 	}
 
@@ -682,23 +682,22 @@ impl FerriscopeState {
 			self.steam_keyboard_layout = layout;
 			self.apply_keyboard_layout();
 		}
-		if events.sdr_brightness_changed {
-			if let Some(nits) = self.steam.as_ref().map(|steam| steam.read_sdr_on_hdr_brightness()) {
-				if nits != self.sdr_white_nits {
-					self.sdr_white_nits = nits;
-					// Every SDR element is drawn differently now, though none of
-					// them changed, so the damage tracker cannot see it.
-					for slot in 0..self.pool.slots.len() {
-						self.damage.ages.invalidate(slot);
-					}
-					self.scheduler.commit(std::time::Instant::now());
-				}
+		if events.sdr_brightness_changed
+			&& let Some(nits) = self.steam.as_ref().map(|steam| steam.read_sdr_on_hdr_brightness())
+			&& nits != self.sdr_white_nits
+		{
+			self.sdr_white_nits = nits;
+			// Every SDR element is drawn differently now, though none of
+			// them changed, so the damage tracker cannot see it.
+			for slot in 0..self.pool.slots.len() {
+				self.damage.ages.invalidate(slot);
 			}
+			self.scheduler.commit(std::time::Instant::now());
 		}
-		if events.touch_click_mode_changed {
-			if let Some(mode) = self.steam.as_ref().map(|steam| steam.read_touch_click_mode()) {
-				self.set_touch_click_mode(mode);
-			}
+		if events.touch_click_mode_changed
+			&& let Some(mode) = self.steam.as_ref().map(|steam| steam.read_touch_click_mode())
+		{
+			self.set_touch_click_mode(mode);
 		}
 		let Some(steam) = self.steam.as_ref() else {
 			return;

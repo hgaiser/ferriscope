@@ -303,10 +303,10 @@ pub unsafe extern "C" fn acquire_next_image(
 	p_image_index: *mut u32,
 ) -> VkResult {
 	unsafe {
-		if let Some(data) = get_swapchain(swapchain_key(swapchain)) {
-			if data.shared.is_retired() {
-				return VK_ERROR_OUT_OF_DATE_KHR;
-			}
+		if let Some(data) = get_swapchain(swapchain_key(swapchain))
+			&& data.shared.is_retired()
+		{
+			return VK_ERROR_OUT_OF_DATE_KHR;
 		}
 		let started = monotonic_ns();
 		let result = match get_device(device_key_of(device)).and_then(|dev| dev.dispatch.acquire_next_image) {
@@ -324,10 +324,10 @@ pub unsafe extern "C" fn acquire_next_image2(
 	p_image_index: *mut u32,
 ) -> VkResult {
 	unsafe {
-		if let Some(data) = get_swapchain(swapchain_key((*p_acquire_info).swapchain)) {
-			if data.shared.is_retired() {
-				return VK_ERROR_OUT_OF_DATE_KHR;
-			}
+		if let Some(data) = get_swapchain(swapchain_key((*p_acquire_info).swapchain))
+			&& data.shared.is_retired()
+		{
+			return VK_ERROR_OUT_OF_DATE_KHR;
 		}
 		let started = monotonic_ns();
 		let result = match get_device(device_key_of(device)).and_then(|dev| dev.dispatch.acquire_next_image2) {

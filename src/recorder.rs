@@ -93,10 +93,10 @@ impl FileRecorder {
 
 impl Sink for FileRecorder {
 	fn submit(&mut self, frame: Frame) -> Result<()> {
-		if let Some(max) = self.max_frames {
-			if self.frames_written >= max {
-				return Ok(());
-			}
+		if let Some(max) = self.max_frames
+			&& self.frames_written >= max
+		{
+			return Ok(());
 		}
 
 		match frame.data {

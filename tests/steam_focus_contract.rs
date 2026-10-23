@@ -430,7 +430,7 @@ fn wait_for_active_window(conn: &RustConnection, atoms: &Atoms, timeout: Duratio
 
 /// Whether the flattened triplets contain `[window, app, pid]`.
 fn has_triplet(windows: &[u32], window: u32, app: u32, pid: u32) -> bool {
-	windows.chunks_exact(3).any(|triplet| triplet == [window, app, pid])
+	windows.as_chunks::<3>().0.contains(&[window, app, pid])
 }
 
 /// Poll `window`'s geometry until it is `w` x `h`, or the timeout elapses.

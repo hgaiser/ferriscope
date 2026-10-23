@@ -85,11 +85,11 @@ impl FerriscopeState {
 				if mode != TouchClickMode::Trackpad {
 					self.warp_pointer(position.x, position.y);
 				}
-				if let Some(button) = mode.button() {
-					if !self.touch.held_buttons.contains(&button) {
-						self.touch.held_buttons.push(button);
-						self.pointer_button(button, true);
-					}
+				if let Some(button) = mode.button()
+					&& !self.touch.held_buttons.contains(&button)
+				{
+					self.touch.held_buttons.push(button);
+					self.pointer_button(button, true);
 				}
 			},
 		}

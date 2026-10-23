@@ -638,10 +638,10 @@ impl FerriscopeState {
 	pub(in crate::shell) fn unconstrained_cursor_bounds(&self) -> Option<(f64, f64, f64, f64)> {
 		let role = self.focus.fullscreen()?;
 		let mut bounds = self.rendered_window_rect(role);
-		if let Some(focused) = self.focus.keyboard() {
-			if focused != role {
-				bounds = union_rect(bounds, self.rendered_window_rect(focused));
-			}
+		if let Some(focused) = self.focus.keyboard()
+			&& focused != role
+		{
+			bounds = union_rect(bounds, self.rendered_window_rect(focused));
 		}
 		// Half-open to inclusive: gamescope clamps to `extent - 1`.
 		Some((

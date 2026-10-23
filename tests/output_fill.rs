@@ -94,12 +94,11 @@ fn latest_sequence(dir: &Path) -> Option<u64> {
 	for entry in std::fs::read_dir(dir).ok()?.flatten() {
 		let name = entry.file_name();
 		let name = name.to_string_lossy();
-		if let Some(rest) = name.strip_prefix("frame_") {
-			if let Some(digits) = rest.strip_suffix(".ppm") {
-				if let Ok(sequence) = digits.parse::<u64>() {
-					latest = Some(latest.map_or(sequence, |current| current.max(sequence)));
-				}
-			}
+		if let Some(rest) = name.strip_prefix("frame_")
+			&& let Some(digits) = rest.strip_suffix(".ppm")
+			&& let Ok(sequence) = digits.parse::<u64>()
+		{
+			latest = Some(latest.map_or(sequence, |current| current.max(sequence)));
 		}
 	}
 	latest
@@ -107,19 +106,20 @@ fn latest_sequence(dir: &Path) -> Option<u64> {
 
 /// Whether all pixels of a frame are non-black (the scaled content fills it).
 fn fills_output(frame: &Ppm) -> bool {
-	frame.width == WIDTH && frame.height == HEIGHT && frame.rgb.chunks_exact(3).all(|pixel| pixel != [0, 0, 0])
+	frame.width == WIDTH
+		&& frame.height == HEIGHT
+		&& frame.rgb.as_chunks::<3>().0.iter().all(|pixel| *pixel != [0, 0, 0])
 }
 
 /// Wait, bounded, for a recorded frame whose content spans the whole output.
 fn wait_for_fill_frame(dir: &Path, timeout: Duration) -> Option<Ppm> {
 	let deadline = Instant::now() + timeout;
 	loop {
-		if let Some(sequence) = latest_sequence(dir) {
-			if let Some(frame) = read_frame(dir, sequence) {
-				if fills_output(&frame) {
-					return Some(frame);
-				}
-			}
+		if let Some(sequence) = latest_sequence(dir)
+			&& let Some(frame) = read_frame(dir, sequence)
+			&& fills_output(&frame)
+		{
+			return Some(frame);
 		}
 		if Instant::now() >= deadline {
 			return None;
@@ -130,7 +130,12 @@ fn wait_for_fill_frame(dir: &Path, timeout: Duration) -> Option<Ppm> {
 
 /// Count pixels whose RGB is not all zero.
 fn non_black_pixels(ppm: &Ppm) -> usize {
-	ppm.rgb.chunks_exact(3).filter(|pixel| pixel != &[0, 0, 0]).count()
+	ppm.rgb
+		.as_chunks::<3>()
+		.0
+		.iter()
+		.filter(|pixel| **pixel != [0, 0, 0])
+		.count()
 }
 
 /// Positions `(x, y)` where two same-sized frames differ.
@@ -168,16 +173,13 @@ fn wait_for_stable_frame(dir: &Path, timeout: Duration) -> Option<Ppm> {
 	let threshold = WIDTH * HEIGHT / 100;
 	let deadline = Instant::now() + timeout;
 	loop {
-		if let Some(sequence) = latest_sequence(dir) {
-			if let Some(frame) = read_frame(dir, sequence) {
-				if non_black_pixels(&frame) > threshold {
-					if let Some(previous) = read_frame(dir, sequence.saturating_sub(1)) {
-						if diff_positions(&previous, &frame).is_empty() {
-							return Some(frame);
-						}
-					}
-				}
-			}
+		if let Some(sequence) = latest_sequence(dir)
+			&& let Some(frame) = read_frame(dir, sequence)
+			&& non_black_pixels(&frame) > threshold
+			&& let Some(previous) = read_frame(dir, sequence.saturating_sub(1))
+			&& diff_positions(&previous, &frame).is_empty()
+		{
+			return Some(frame);
 		}
 		if Instant::now() >= deadline {
 			return None;
@@ -200,14 +202,13 @@ fn wait_for_cursor_left_edge(
 ) -> Option<Ppm> {
 	let deadline = Instant::now() + timeout;
 	loop {
-		if let Some(sequence) = latest_sequence(dir) {
-			if let Some(frame) = read_frame(dir, sequence) {
-				if let Some((min_x, _, _, _)) = diff_bbox(baseline, &frame) {
-					if min_x >= left_edge_range.0 && min_x <= left_edge_range.1 {
-						return Some(frame);
-					}
-				}
-			}
+		if let Some(sequence) = latest_sequence(dir)
+			&& let Some(frame) = read_frame(dir, sequence)
+			&& let Some((min_x, _, _, _)) = diff_bbox(baseline, &frame)
+			&& min_x >= left_edge_range.0
+			&& min_x <= left_edge_range.1
+		{
+			return Some(frame);
 		}
 		if Instant::now() >= deadline {
 			return None;

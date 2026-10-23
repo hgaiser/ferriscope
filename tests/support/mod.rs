@@ -490,10 +490,8 @@ impl App {
 		let xdg_surface = self.wm_base.get_xdg_surface(&surface, qh, ());
 		let popup = xdg_surface.get_popup(Some(&parent), &positioner, qh, ());
 		positioner.destroy();
-		if grab {
-			if let Some(serial) = self.pointer_button_serial {
-				popup.grab(&self._seat, serial);
-			}
+		if grab && let Some(serial) = self.pointer_button_serial {
+			popup.grab(&self._seat, serial);
 		}
 		// As for a toplevel: a bufferless commit, then ack the configure
 		// before attaching a buffer. Without the configure it never maps.
@@ -1055,7 +1053,9 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
 		};
 		let has_state = |want: xdg_toplevel::State| {
 			states
-				.chunks_exact(4)
+				.as_chunks::<4>()
+				.0
+				.iter()
 				.any(|chunk| u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) == u32::from(want))
 		};
 		let activated = has_state(xdg_toplevel::State::Activated);

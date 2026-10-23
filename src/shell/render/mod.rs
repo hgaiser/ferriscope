@@ -386,10 +386,10 @@ impl FerriscopeState {
 			// path holds no slot: the sink copies the pixels synchronously.
 			#[cfg(feature = "test-support")]
 			{
-				if !sync.is_reached() {
-					if let Err(e) = sync.wait() {
-						tracing::warn!("readback fence wait: {e:?}");
-					}
+				if !sync.is_reached()
+					&& let Err(e) = sync.wait()
+				{
+					tracing::warn!("readback fence wait: {e:?}");
 				}
 				let dmabuf = self.pool.slots[id]
 					.as_mut()
@@ -439,10 +439,10 @@ impl FerriscopeState {
 				let mut target =
 					Bind::bind(&mut self.renderer, target_buf).map_err(|e| Error::Render(format!("bind: {e:?}")))?;
 				let sync = render_into(&mut self.renderer, &mut target, elements, &mut self.damage, 0)?;
-				if !sync.is_reached() {
-					if let Err(e) = sync.wait() {
-						tracing::warn!("readback fence wait: {e:?}");
-					}
+				if !sync.is_reached()
+					&& let Err(e) = sync.wait()
+				{
+					tracing::warn!("readback fence wait: {e:?}");
 				}
 				let region = Rectangle::<i32, BufferCoord>::from_size(buffer_size);
 				self.renderer

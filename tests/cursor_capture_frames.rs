@@ -157,12 +157,11 @@ fn latest_sequence(dir: &Path) -> Option<u64> {
 	for entry in entries.flatten() {
 		let name = entry.file_name();
 		let name = name.to_string_lossy();
-		if let Some(rest) = name.strip_prefix("frame_") {
-			if let Some(digits) = rest.strip_suffix(".ppm") {
-				if let Ok(sequence) = digits.parse::<u64>() {
-					latest = Some(latest.map_or(sequence, |current| current.max(sequence)));
-				}
-			}
+		if let Some(rest) = name.strip_prefix("frame_")
+			&& let Some(digits) = rest.strip_suffix(".ppm")
+			&& let Ok(sequence) = digits.parse::<u64>()
+		{
+			latest = Some(latest.map_or(sequence, |current| current.max(sequence)));
 		}
 	}
 	latest
@@ -170,7 +169,12 @@ fn latest_sequence(dir: &Path) -> Option<u64> {
 
 /// Count pixels whose RGB is not all zero.
 fn non_black_pixels(ppm: &Ppm) -> usize {
-	ppm.rgb.chunks_exact(3).filter(|pixel| pixel != &[0, 0, 0]).count()
+	ppm.rgb
+		.as_chunks::<3>()
+		.0
+		.iter()
+		.filter(|pixel| **pixel != [0, 0, 0])
+		.count()
 }
 
 /// Positions (x, y) where two same-sized frames differ.
@@ -204,16 +208,16 @@ fn wait_for_stable_frame(dir: &Path, guard: &mut FramesGuard, timeout: Duration)
 		if Instant::now() >= deadline {
 			return None;
 		}
-		if let Some(sequence) = latest_sequence(dir) {
-			if let Some(frame) = read_frame(dir, sequence) {
+		if let Some(sequence) = latest_sequence(dir)
+			&& let Some(frame) = read_frame(dir, sequence)
+		{
+			guard.frames_read += 1;
+			if non_black_pixels(&frame) > threshold
+				&& let Some(previous) = read_frame(dir, sequence.saturating_sub(1))
+			{
 				guard.frames_read += 1;
-				if non_black_pixels(&frame) > threshold {
-					if let Some(previous) = read_frame(dir, sequence.saturating_sub(1)) {
-						guard.frames_read += 1;
-						if diff_positions(&previous, &frame).is_empty() {
-							return Some((sequence, frame));
-						}
-					}
+				if diff_positions(&previous, &frame).is_empty() {
+					return Some((sequence, frame));
 				}
 			}
 		}
@@ -259,13 +263,12 @@ fn wait_for_diff_frame(
 fn wait_for_frame_after(dir: &Path, guard: &mut FramesGuard, after: u64, timeout: Duration) -> Option<(u64, Ppm)> {
 	let deadline = Instant::now() + timeout;
 	loop {
-		if let Some(latest) = latest_sequence(dir) {
-			if latest > after {
-				if let Some(frame) = read_frame(dir, latest) {
-					guard.frames_read += 1;
-					return Some((latest, frame));
-				}
-			}
+		if let Some(latest) = latest_sequence(dir)
+			&& latest > after
+			&& let Some(frame) = read_frame(dir, latest)
+		{
+			guard.frames_read += 1;
+			return Some((latest, frame));
 		}
 		if Instant::now() >= deadline {
 			return None;
@@ -288,15 +291,15 @@ fn wait_for_settled_diff(
 ) -> Option<(u64, Ppm)> {
 	let deadline = Instant::now() + timeout;
 	loop {
-		if let Some(latest) = latest_sequence(dir) {
-			if let Some(frame) = read_frame(dir, latest) {
-				guard.frames_read += 1;
-				if !diff_positions(reference, &frame).is_empty() {
-					// Require the newest frame to be the last written so a frame
-					// mid-motion is not mistaken for the settled one.
-					if latest_sequence(dir) == Some(latest) {
-						return Some((latest, frame));
-					}
+		if let Some(latest) = latest_sequence(dir)
+			&& let Some(frame) = read_frame(dir, latest)
+		{
+			guard.frames_read += 1;
+			if !diff_positions(reference, &frame).is_empty() {
+				// Require the newest frame to be the last written so a frame
+				// mid-motion is not mistaken for the settled one.
+				if latest_sequence(dir) == Some(latest) {
+					return Some((latest, frame));
 				}
 			}
 		}

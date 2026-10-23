@@ -359,10 +359,10 @@ pub(crate) fn serve(config: CompositorConfig, endpoints: Endpoints) -> Result<()
 		state.signal_ready(None);
 	}
 
-	if let Some(argv) = state.config.command.clone() {
-		if !state.config.xwayland {
-			state.spawn_app(&argv, None)?;
-		}
+	if let Some(argv) = state.config.command.clone()
+		&& !state.config.xwayland
+	{
+		state.spawn_app(&argv, None)?;
 	}
 
 	event_loop

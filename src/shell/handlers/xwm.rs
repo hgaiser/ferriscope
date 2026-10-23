@@ -70,16 +70,15 @@ impl FerriscopeState {
 								// connection: gamescope corrects a focus stolen
 								// out of the keyboard-focus window from its
 								// `FocusOut` handler (`steamcompmgr.cpp:8602`).
-								if let Some(fd) = atoms.duplicate_fd() {
-									if let Err(e) = loop_handle.insert_source(
+								if let Some(fd) = atoms.duplicate_fd()
+									&& let Err(e) = loop_handle.insert_source(
 										Generic::new(fd, Interest::READ, Mode::Level),
 										|_, _, state: &mut Self| {
 											state.poll_x11_events();
 											Ok(PostAction::Continue)
 										},
 									) {
-										tracing::warn!("insert X focus source: {e:?}");
-									}
+									tracing::warn!("insert X focus source: {e:?}");
 								}
 								state.focus_control = atoms.read_focus_control();
 								// The WSI layer exposes HDR swapchain formats only when
@@ -100,10 +99,10 @@ impl FerriscopeState {
 						// always means the X display is usable. The X display
 						// number only exists here, so it is carried on this path.
 						state.signal_ready(Some(display_number));
-						if let Some(argv) = state.config.command.clone() {
-							if let Err(e) = state.spawn_app(&argv, Some(display_number)) {
-								tracing::error!("failed to spawn hosted application: {e}");
-							}
+						if let Some(argv) = state.config.command.clone()
+							&& let Err(e) = state.spawn_app(&argv, Some(display_number))
+						{
+							tracing::error!("failed to spawn hosted application: {e}");
 						}
 					},
 					Err(e) => {

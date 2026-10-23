@@ -211,12 +211,11 @@ fn wait_for_xev_window(display: u32, timeout: Duration) -> Option<String> {
 			display,
 			"xdotool",
 			&["search", "--onlyvisible", "--name", "Event Tester"],
-		) {
-			if let Some(id) = ids.lines().next() {
-				let id = id.trim().to_string();
-				if !id.is_empty() {
-					return Some(id);
-				}
+		) && let Some(id) = ids.lines().next()
+		{
+			let id = id.trim().to_string();
+			if !id.is_empty() {
+				return Some(id);
 			}
 		}
 		if Instant::now() >= deadline {

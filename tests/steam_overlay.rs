@@ -177,12 +177,11 @@ fn latest_sequence(dir: &Path) -> Option<u64> {
 	for entry in std::fs::read_dir(dir).ok()?.flatten() {
 		let name = entry.file_name();
 		let name = name.to_string_lossy();
-		if let Some(rest) = name.strip_prefix("frame_") {
-			if let Some(digits) = rest.strip_suffix(".ppm") {
-				if let Ok(sequence) = digits.parse::<u64>() {
-					latest = Some(latest.map_or(sequence, |current| current.max(sequence)));
-				}
-			}
+		if let Some(rest) = name.strip_prefix("frame_")
+			&& let Some(digits) = rest.strip_suffix(".ppm")
+			&& let Ok(sequence) = digits.parse::<u64>()
+		{
+			latest = Some(latest.map_or(sequence, |current| current.max(sequence)));
 		}
 	}
 	latest
@@ -190,7 +189,12 @@ fn latest_sequence(dir: &Path) -> Option<u64> {
 
 /// Count pixels whose RGB is not all zero.
 fn non_black_pixels(ppm: &Ppm) -> usize {
-	ppm.rgb.chunks_exact(3).filter(|pixel| pixel != &[0, 0, 0]).count()
+	ppm.rgb
+		.as_chunks::<3>()
+		.0
+		.iter()
+		.filter(|pixel| **pixel != [0, 0, 0])
+		.count()
 }
 
 /// The RGB at `(x, y)`, if the frame covers it.
@@ -235,16 +239,14 @@ fn wait_for_mapped_frame(dir: &Path, timeout: Duration) -> Option<(u64, Ppm)> {
 		if Instant::now() >= deadline {
 			return None;
 		}
-		if let Some(sequence) = latest_sequence(dir) {
-			if let Some(frame) = read_frame(dir, sequence) {
-				if non_black_pixels(&frame) > threshold {
-					if let Some(previous) = read_frame(dir, sequence.saturating_sub(1)) {
-						if pixel(&previous, 0, 0).is_some() && previous.rgb == frame.rgb {
-							return Some((sequence, frame));
-						}
-					}
-				}
-			}
+		if let Some(sequence) = latest_sequence(dir)
+			&& let Some(frame) = read_frame(dir, sequence)
+			&& non_black_pixels(&frame) > threshold
+			&& let Some(previous) = read_frame(dir, sequence.saturating_sub(1))
+			&& pixel(&previous, 0, 0).is_some()
+			&& previous.rgb == frame.rgb
+		{
+			return Some((sequence, frame));
 		}
 		thread::sleep(POLL_SLICE);
 	}
@@ -263,8 +265,8 @@ fn overlay_region(frame: &Ppm, width: usize, height: usize) -> Option<Bbox> {
 	let expected = width * height;
 	let mut count = 0usize;
 	let mut bbox: Option<Bbox> = None;
-	for (i, p) in frame.rgb.chunks_exact(3).enumerate() {
-		if !is_overlay_color([p[0], p[1], p[2]]) {
+	for (i, p) in frame.rgb.as_chunks::<3>().0.iter().enumerate() {
+		if !is_overlay_color(*p) {
 			continue;
 		}
 		count += 1;
@@ -296,10 +298,10 @@ fn wait_for_overlay_region(
 	loop {
 		if let Some(latest) = latest_sequence(dir) {
 			while next <= latest {
-				if let Some(frame) = read_frame(dir, next) {
-					if let Some(region) = overlay_region(&frame, width, height) {
-						return Some((next, frame, region));
-					}
+				if let Some(frame) = read_frame(dir, next)
+					&& let Some(region) = overlay_region(&frame, width, height)
+				{
+					return Some((next, frame, region));
 				}
 				next += 1;
 			}
@@ -371,10 +373,11 @@ fn wait_for_active(display: u32, window: &str, timeout: Duration) -> bool {
 fn wait_for_window_size(conn: &RustConnection, window: Window, w: u16, h: u16, timeout: Duration) -> bool {
 	let deadline = Instant::now() + timeout;
 	loop {
-		if let Some(reply) = conn.get_geometry(window).ok().and_then(|cookie| cookie.reply().ok()) {
-			if reply.width == w && reply.height == h {
-				return true;
-			}
+		if let Some(reply) = conn.get_geometry(window).ok().and_then(|cookie| cookie.reply().ok())
+			&& reply.width == w
+			&& reply.height == h
+		{
+			return true;
 		}
 		if Instant::now() >= deadline {
 			return false;
@@ -1424,10 +1427,10 @@ fn wait_for_pixel(
 	loop {
 		if let Some(latest) = latest_sequence(dir) {
 			while next <= latest {
-				if let Some(rgb) = read_frame(dir, next).and_then(|frame| pixel(&frame, x, y)) {
-					if predicate(rgb) {
-						return Some((next, rgb));
-					}
+				if let Some(rgb) = read_frame(dir, next).and_then(|frame| pixel(&frame, x, y))
+					&& predicate(rgb)
+				{
+					return Some((next, rgb));
 				}
 				next += 1;
 			}

@@ -116,10 +116,10 @@ impl ParamsBuilder {
 		let (Some(transfer), Some(primaries)) = (self.transfer, self.primaries) else {
 			return Err(BuildError::Incomplete);
 		};
-		if let (Some(max_cll), Some(max_fall)) = (self.max_cll, self.max_fall) {
-			if max_fall > max_cll {
-				return Err(BuildError::InvalidLuminance);
-			}
+		if let (Some(max_cll), Some(max_fall)) = (self.max_cll, self.max_fall)
+			&& max_fall > max_cll
+		{
+			return Err(BuildError::InvalidLuminance);
 		}
 		let kind = match (transfer, primaries) {
 			(NamedTransfer::Pq, NamedPrimaries::Bt2020) => ContentKind::Pq,

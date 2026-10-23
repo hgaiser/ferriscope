@@ -163,7 +163,9 @@ fn is_solid(frame: &Ppm, rgb: [u8; 3]) -> bool {
 		&& frame.height == HEIGHT
 		&& frame
 			.rgb
-			.chunks_exact(3)
+			.as_chunks::<3>()
+			.0
+			.iter()
 			.all(|pixel| pixel.iter().zip(rgb).all(|(got, want)| got.abs_diff(want) <= 8))
 }
 
@@ -404,7 +406,7 @@ impl Client {
 		let fd: OwnedFd = rustix_memfd(size);
 		{
 			let mut map = unsafe { memmap(&fd, size) };
-			for pixel in map.chunks_exact_mut(4) {
+			for pixel in map.as_chunks_mut::<4>().0 {
 				pixel.copy_from_slice(&color.to_le_bytes());
 			}
 		}

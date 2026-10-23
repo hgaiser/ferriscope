@@ -264,10 +264,10 @@ impl Compositor {
 
 impl Drop for Compositor {
 	fn drop(&mut self) {
-		if self.thread.is_some() {
-			if let Err(e) = self.shutdown() {
-				tracing::warn!("compositor shutdown: {e}");
-			}
+		if self.thread.is_some()
+			&& let Err(e) = self.shutdown()
+		{
+			tracing::warn!("compositor shutdown: {e}");
 		}
 	}
 }

@@ -266,7 +266,7 @@ impl Reader {
 							ffi::UNSIGNED_INT_2_10_10_10_REV,
 							words.as_mut_ptr().cast(),
 						);
-						for (word, out) in words.iter().zip(floats.chunks_exact_mut(4)) {
+						for (word, out) in words.iter().zip(floats.as_chunks_mut::<4>().0) {
 							out.copy_from_slice(&[
 								(word & 0x3ff) as f32 / 1023.0,
 								((word >> 10) & 0x3ff) as f32 / 1023.0,
@@ -633,13 +633,12 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
 		_: &Connection,
 		qh: &QueueHandle<Self>,
 	) {
-		if let wl_seat::Event::Capabilities { capabilities } = event {
-			if capabilities
+		if let wl_seat::Event::Capabilities { capabilities } = event
+			&& capabilities
 				.into_result()
 				.is_ok_and(|caps| caps.contains(wl_seat::Capability::Pointer))
-			{
-				seat.get_pointer(qh, ());
-			}
+		{
+			seat.get_pointer(qh, ());
 		}
 	}
 }

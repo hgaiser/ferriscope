@@ -160,7 +160,7 @@ impl SwapchainShared {
 	/// surplus (no present waiting) is dropped.
 	pub fn on_frame_ready(&self) {
 		let presented = self.presented.load(Ordering::Acquire);
-		let _ = self.ready.fetch_update(Ordering::AcqRel, Ordering::Acquire, |ready| {
+		let _ = self.ready.try_update(Ordering::AcqRel, Ordering::Acquire, |ready| {
 			(ready < presented).then_some(ready + 1)
 		});
 	}

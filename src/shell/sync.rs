@@ -314,10 +314,10 @@ impl FerriscopeState {
 				|_, states, _| {
 					// `states` is already locked by the traversal; re-entering
 					// `with_states` on the same surface would deadlock.
-					if let Some(data) = states.data_map.get::<RendererSurfaceStateUserData>() {
-						if let Some(buffer) = data.lock().unwrap().buffer() {
-							buffers.push(buffer.clone());
-						}
+					if let Some(data) = states.data_map.get::<RendererSurfaceStateUserData>()
+						&& let Some(buffer) = data.lock().unwrap().buffer()
+					{
+						buffers.push(buffer.clone());
 					}
 				},
 				|_, _, _| true,

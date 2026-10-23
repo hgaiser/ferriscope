@@ -159,12 +159,11 @@ fn latest_sequence(dir: &Path) -> Option<u64> {
 	for entry in std::fs::read_dir(dir).ok()?.flatten() {
 		let name = entry.file_name();
 		let name = name.to_string_lossy();
-		if let Some(rest) = name.strip_prefix("frame_") {
-			if let Some(digits) = rest.strip_suffix(".ppm") {
-				if let Ok(sequence) = digits.parse::<u64>() {
-					latest = Some(latest.map_or(sequence, |current| current.max(sequence)));
-				}
-			}
+		if let Some(rest) = name.strip_prefix("frame_")
+			&& let Some(digits) = rest.strip_suffix(".ppm")
+			&& let Ok(sequence) = digits.parse::<u64>()
+		{
+			latest = Some(latest.map_or(sequence, |current| current.max(sequence)));
 		}
 	}
 	latest
@@ -172,7 +171,12 @@ fn latest_sequence(dir: &Path) -> Option<u64> {
 
 /// Count pixels whose RGB is not all zero.
 fn non_black_pixels(ppm: &Ppm) -> usize {
-	ppm.rgb.chunks_exact(3).filter(|pixel| pixel != &[0, 0, 0]).count()
+	ppm.rgb
+		.as_chunks::<3>()
+		.0
+		.iter()
+		.filter(|pixel| **pixel != [0, 0, 0])
+		.count()
 }
 
 /// Whether a pixel is the probe's green, tolerant of rounding.
@@ -189,16 +193,13 @@ fn wait_for_mapped_frame(dir: &Path, timeout: Duration) -> Option<(u64, Ppm)> {
 		if Instant::now() >= deadline {
 			return None;
 		}
-		if let Some(sequence) = latest_sequence(dir) {
-			if let Some(frame) = read_frame(dir, sequence) {
-				if non_black_pixels(&frame) > threshold {
-					if let Some(previous) = read_frame(dir, sequence.saturating_sub(1)) {
-						if previous.rgb == frame.rgb {
-							return Some((sequence, frame));
-						}
-					}
-				}
-			}
+		if let Some(sequence) = latest_sequence(dir)
+			&& let Some(frame) = read_frame(dir, sequence)
+			&& non_black_pixels(&frame) > threshold
+			&& let Some(previous) = read_frame(dir, sequence.saturating_sub(1))
+			&& previous.rgb == frame.rgb
+		{
+			return Some((sequence, frame));
 		}
 		thread::sleep(POLL_SLICE);
 	}
@@ -211,8 +212,8 @@ type Bbox = (usize, usize, usize, usize);
 /// frame does not contain a `BLOCK_W`×`BLOCK_H` block of it.
 fn find_probe(frame: &Ppm) -> Option<Bbox> {
 	let mut bbox: Option<(usize, usize, usize, usize)> = None;
-	for (i, p) in frame.rgb.chunks_exact(3).enumerate() {
-		if !is_probe_color([p[0], p[1], p[2]]) {
+	for (i, p) in frame.rgb.as_chunks::<3>().0.iter().enumerate() {
+		if !is_probe_color(*p) {
 			continue;
 		}
 		let (x, y) = (i % frame.width, i / frame.width);
@@ -237,10 +238,10 @@ fn wait_for_probe(dir: &Path, after: u64, timeout: Duration) -> Option<(u64, Ppm
 	loop {
 		if let Some(latest) = latest_sequence(dir) {
 			while next <= latest {
-				if let Some(frame) = read_frame(dir, next) {
-					if let Some(region) = find_probe(&frame) {
-						return Some((next, frame, region));
-					}
+				if let Some(frame) = read_frame(dir, next)
+					&& let Some(region) = find_probe(&frame)
+				{
+					return Some((next, frame, region));
 				}
 				next += 1;
 			}

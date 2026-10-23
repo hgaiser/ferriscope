@@ -120,12 +120,11 @@ impl PointerConstraintsHandler for FerriscopeState {
 		// The hint is surface-local, so the scene point is mapped back through
 		// the output-fill transform (identity without scaling) before it
 		// becomes the output-space cursor position.
-		if let Some((hint_surface, hint)) = self.cursor_position_hint.take() {
-			if &hint_surface == surface {
-				if let Some(origin) = self.window_origin_for_surface(surface) {
-					self.cursor.location = self.scene_to_output(origin + hint);
-				}
-			}
+		if let Some((hint_surface, hint)) = self.cursor_position_hint.take()
+			&& &hint_surface == surface
+			&& let Some(origin) = self.window_origin_for_surface(surface)
+		{
+			self.cursor.location = self.scene_to_output(origin + hint);
 		}
 	}
 
