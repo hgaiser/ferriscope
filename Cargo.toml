@@ -88,7 +88,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # Feature set is trimmed to the sink path: a Wayland compositor with one
 # Vulkan renderer (compute queue) and a GBM/dmabuf allocator. No udev, seat or
 # libinput backends, no GL, no multi-GPU renderer.
-smithay = { path = "../smithay", default-features = false, features = [
+smithay = { git = "https://github.com/hgaiser/smithay", rev = "fa2f9e3bdc1be3d6da2a3837b33c684d0cdeea34", default-features = false, features = [
 	"backend_gbm",
 	"backend_vulkan",
 	"renderer_vulkan",
