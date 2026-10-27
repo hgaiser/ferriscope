@@ -33,17 +33,15 @@ use smithay::{
 			dmabuf::{AsDmabuf, Dmabuf},
 			gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
 		},
-		egl::{EGLContext, EGLDisplay},
-		renderer::{
-			Bind, Color32F, Frame as _, ImportDma, Renderer,
-			gles::{GlesRenderer, ffi},
-		},
+		drm::{DrmDeviceFd, DrmNode},
+		renderer::{Bind, Color32F, ExportMem, Frame as _, ImportDma, Renderer, vulkan::VulkanRenderer},
+		vulkan::{Instance, PhysicalDevice, version::Version},
 	},
 	reexports::rustix::{
 		event::{PollFd, PollFlags, Timespec, poll},
 		mm::{MapFlags, ProtFlags, mmap, munmap},
 	},
-	utils::{Physical, Rectangle, Size, Transform},
+	utils::{DeviceFd, Physical, Rectangle, Size, Transform},
 };
 use wayland_client::{
 	Connection, Dispatch, QueueHandle, delegate_noop,
@@ -193,20 +191,26 @@ impl Drop for Session {
 
 /// Reads delivered DMA-BUFs back through a renderer of the test's own.
 struct Reader {
-	renderer: GlesRenderer,
+	renderer: VulkanRenderer,
 }
 
 impl Reader {
 	fn new() -> Self {
+		use std::os::unix::fs::MetadataExt;
+
 		let file = std::fs::OpenOptions::new()
 			.read(true)
 			.write(true)
 			.open(RENDER_NODE)
 			.expect("open the render node");
-		let gbm = GbmDevice::new(Arc::new(file)).expect("gbm device");
-		let display = unsafe { EGLDisplay::new(gbm) }.expect("egl display");
-		let context = EGLContext::new(&display).expect("egl context");
-		let renderer = unsafe { GlesRenderer::new(context) }.expect("gles");
+		let node = DrmNode::from_dev_id(file.metadata().expect("stat the render node").rdev()).expect("drm node");
+		let instance = Instance::new(Version::VERSION_1_3, None).expect("vulkan instance");
+		let phd = PhysicalDevice::enumerate(&instance)
+			.expect("enumerate vulkan devices")
+			.find(|phd| phd.render_node().ok().flatten() == Some(node))
+			.expect("a vulkan device for the render node");
+		let drm = DrmDeviceFd::new(DeviceFd::from(std::os::fd::OwnedFd::from(file)));
+		let renderer = VulkanRenderer::new(&phd, Some(drm)).expect("vulkan renderer");
 		Self { renderer }
 	}
 
@@ -231,72 +235,49 @@ impl Reader {
 			.renderer
 			.import_dmabuf(&frame.dmabuf, None)
 			.expect("import the delivered dmabuf");
-		let id = texture.tex_id();
 		let fourcc = frame.dmabuf.format().code;
-		let mut floats = vec![0f32; (WIDTH * HEIGHT * 4) as usize];
-		self.renderer
-			.with_context(|gl| unsafe {
-				let mut fbo = 0;
-				gl.GenFramebuffers(1, &mut fbo);
-				gl.BindFramebuffer(ffi::FRAMEBUFFER, fbo);
-				gl.FramebufferTexture2D(ffi::FRAMEBUFFER, ffi::COLOR_ATTACHMENT0, ffi::TEXTURE_2D, id, 0);
-				assert_eq!(
-					gl.CheckFramebufferStatus(ffi::FRAMEBUFFER),
-					ffi::FRAMEBUFFER_COMPLETE,
-					"the delivered dmabuf cannot be a framebuffer"
-				);
-				match fourcc {
-					Fourcc::Abgr16161616f => gl.ReadPixels(
-						0,
-						0,
-						WIDTH as i32,
-						HEIGHT as i32,
-						ffi::RGBA,
-						ffi::FLOAT,
-						floats.as_mut_ptr().cast(),
-					),
-					Fourcc::Abgr2101010 => {
-						let mut words = vec![0u32; (WIDTH * HEIGHT) as usize];
-						gl.ReadPixels(
-							0,
-							0,
-							WIDTH as i32,
-							HEIGHT as i32,
-							ffi::RGBA,
-							ffi::UNSIGNED_INT_2_10_10_10_REV,
-							words.as_mut_ptr().cast(),
-						);
-						for (word, out) in words.iter().zip(floats.as_chunks_mut::<4>().0) {
-							out.copy_from_slice(&[
-								(word & 0x3ff) as f32 / 1023.0,
-								((word >> 10) & 0x3ff) as f32 / 1023.0,
-								((word >> 20) & 0x3ff) as f32 / 1023.0,
-								(word >> 30) as f32 / 3.0,
-							]);
-						}
-					},
-					_ => {
-						let mut bytes = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-						gl.ReadPixels(
-							0,
-							0,
-							WIDTH as i32,
-							HEIGHT as i32,
-							ffi::RGBA,
-							ffi::UNSIGNED_BYTE,
-							bytes.as_mut_ptr().cast(),
-						);
-						for (byte, out) in bytes.iter().zip(floats.iter_mut()) {
-							*out = f32::from(*byte) / 255.0;
-						}
-					},
-				}
-				assert_eq!(gl.GetError(), ffi::NO_ERROR, "glReadPixels failed");
-				gl.BindFramebuffer(ffi::FRAMEBUFFER, 0);
-				gl.DeleteFramebuffers(1, &fbo);
-			})
-			.expect("gl context");
-		floats
+		let region = Rectangle::from_size((WIDTH as i32, HEIGHT as i32).into());
+		let mapping = self
+			.renderer
+			.copy_texture(&texture, region, fourcc)
+			.expect("read the delivered dmabuf back");
+		let bytes = self.renderer.map_texture(&mapping).expect("map the readback");
+		match fourcc {
+			Fourcc::Abgr16161616f | Fourcc::Xbgr16161616f => bytes
+				.as_chunks::<2>()
+				.0
+				.iter()
+				.map(|half| f16_to_f32(u16::from_le_bytes(*half)))
+				.collect(),
+			Fourcc::Abgr2101010 | Fourcc::Xbgr2101010 => bytes
+				.as_chunks::<4>()
+				.0
+				.iter()
+				.flat_map(|word| {
+					let word = u32::from_le_bytes(*word);
+					[
+						(word & 0x3ff) as f32 / 1023.0,
+						((word >> 10) & 0x3ff) as f32 / 1023.0,
+						((word >> 20) & 0x3ff) as f32 / 1023.0,
+						(word >> 30) as f32 / 3.0,
+					]
+				})
+				.collect(),
+			// Abgr8888: R, G, B, A bytes in memory.
+			_ => bytes.iter().map(|byte| f32::from(*byte) / 255.0).collect(),
+		}
+	}
+}
+
+/// An IEEE 754 half-precision float.
+fn f16_to_f32(bits: u16) -> f32 {
+	let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+	let exponent = i32::from((bits >> 10) & 0x1f);
+	let mantissa = f32::from(bits & 0x3ff);
+	sign * match exponent {
+		0 => mantissa * 2f32.powi(-24),
+		31 => f32::INFINITY,
+		_ => (1.0 + mantissa / 1024.0) * 2f32.powi(exponent - 15),
 	}
 }
 
@@ -674,10 +655,8 @@ delegate_noop!(State: ignore gamescope_swapchain_factory_v2::GamescopeSwapchainF
 delegate_noop!(State: ignore gamescope_swapchain::GamescopeSwapchain);
 
 /// An `Xbgr2101010` buffer of the output's size, cleared to `colour` by
-/// `renderer`, in a layout the renderer can render to (NVIDIA's EGL takes a
-/// linear 10-bit buffer only as an external image, which the composite cannot
-/// sample).
-fn dmabuf_cleared_to(renderer: &mut GlesRenderer, colour: [f32; 4]) -> Dmabuf {
+/// `renderer`, in a tiled layout the renderer can render to.
+fn dmabuf_cleared_to(renderer: &mut VulkanRenderer, colour: [f32; 4]) -> Dmabuf {
 	let file = std::fs::OpenOptions::new()
 		.read(true)
 		.write(true)
@@ -685,9 +664,8 @@ fn dmabuf_cleared_to(renderer: &mut GlesRenderer, colour: [f32; 4]) -> Dmabuf {
 		.expect("open the render node");
 	let gbm = GbmDevice::new(Arc::new(file)).expect("gbm device");
 	let mut allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
-	let modifiers: Vec<Modifier> = renderer
-		.egl_context()
-		.dmabuf_render_formats()
+	let modifiers: Vec<Modifier> = Bind::<Dmabuf>::supported_formats(renderer)
+		.expect("render formats")
 		.iter()
 		.filter(|format| format.code == SmithayFourcc::Xbgr2101010 && format.modifier != Modifier::Linear)
 		.map(|format| format.modifier)
@@ -891,10 +869,9 @@ fn an_hdr_game_dmabuf_is_passed_through_with_its_metadata() {
 		frame.acquire_fence.is_none(),
 		"a passed-through frame has no composite to fence"
 	);
-	// GLES reads an alpha-less 10-bit framebuffer back as 8-bit only.
 	let centre = pixel(&reader.read(&frame), WIDTH as usize / 2, HEIGHT as usize / 2);
 	assert!(
-		close(centre, unorm10(512, 256, 768), 1.0 / 255.0),
+		close(centre, unorm10(512, 256, 768), 0.5 / 1023.0),
 		"centre pixel is {centre:?}"
 	);
 	assert_eq!(colour.transfer, TransferFunction::Pq);

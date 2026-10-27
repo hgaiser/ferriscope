@@ -19,15 +19,14 @@ use std::{
 };
 
 #[cfg(feature = "test-support")]
-use smithay::backend::renderer::gles::GlesRenderbuffer;
+use smithay::backend::vulkan::image::VulkanImage;
 use smithay::{
 	backend::{
 		allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
-		drm::DrmDeviceFd,
-		egl::{EGLContext, EGLDisplay},
+		drm::{DrmDeviceFd, sync::supports_syncobj_eventfd},
 		renderer::{
 			ImportDma, ImportMemWl,
-			gles::{GlesRenderer, GlesTexProgram},
+			vulkan::{VulkanRenderer, VulkanTexProgram},
 		},
 	},
 	desktop::{PopupManager, Space, Window},
@@ -47,7 +46,7 @@ use smithay::{
 	wayland::{
 		compositor::{CompositorClientState, CompositorState},
 		dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufState},
-		drm_syncobj::{DrmSyncobjState, supports_syncobj_eventfd},
+		drm_syncobj::DrmSyncobjState,
 		output::OutputManagerState,
 		pointer_constraints::PointerConstraintsState,
 		relative_pointer::RelativePointerManagerState,
@@ -221,7 +220,7 @@ pub struct FerriscopeState {
 	/// lock is released.
 	cursor_position_hint: Option<(WlSurface, Point<f64, Logical>)>,
 
-	renderer: GlesRenderer,
+	renderer: VulkanRenderer,
 	allocator: GbmAllocator<Arc<std::fs::File>>,
 	/// The pool's current format: the SDR one, or an HDR one while the base
 	/// layer is HDR (see [`Self::select_output_encoding`]).
@@ -238,7 +237,7 @@ pub struct FerriscopeState {
 	/// (`flSDROnHDRBrightness`).
 	sdr_white_nits: f32,
 	/// The SDR-to-HDR conversion shader; compiled when HDR output is on.
-	sdr_program: Option<GlesTexProgram>,
+	sdr_program: Option<VulkanTexProgram>,
 	/// Whether the missing-HDR-format warning was logged.
 	hdr_format_warned: bool,
 	use_dmabuf: bool,
@@ -253,7 +252,7 @@ pub struct FerriscopeState {
 	pool: DmabufPool,
 	/// The offscreen readback target of the non-DMA-BUF render path.
 	#[cfg(feature = "test-support")]
-	frame_target: Option<GlesRenderbuffer>,
+	frame_target: Option<VulkanImage>,
 	/// The damage tracker and the buffer age of each render target.
 	damage: FrameDamage,
 	/// Per-frame buffers kept across frames to avoid reallocating them.
@@ -413,11 +412,11 @@ impl FerriscopeState {
 		let syncobj_fd = file
 			.try_clone()
 			.map_err(|e| Error::Gpu(format!("dup {}: {e}", config.render_node.display())))?;
+		let renderer_file = file
+			.try_clone()
+			.map_err(|e| Error::Gpu(format!("dup {}: {e}", config.render_node.display())))?;
 		let gbm = GbmDevice::new(Arc::new(file)).map_err(|e| Error::Gpu(format!("gbm device: {e:?}")))?;
-		let display_egl =
-			unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|e| Error::Gpu(format!("egl display: {e:?}")))?;
-		let context = EGLContext::new(&display_egl).map_err(|e| Error::Gpu(format!("egl context: {e:?}")))?;
-		let mut renderer = unsafe { GlesRenderer::new(context) }.map_err(|e| Error::Gpu(format!("gles: {e:?}")))?;
+		let mut renderer = render::gpu::create_renderer(&config.render_node, renderer_file)?;
 		let allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
 		let render_format = pick_render_format(&renderer)?;
 		let sdr_program = if config.hdr {

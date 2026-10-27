@@ -12,8 +12,8 @@ use smithay::{
 				surface::WaylandSurfaceRenderElement,
 				utils::{RelocateRenderElement, RescaleRenderElement},
 			},
-			gles::{GlesRenderer, GlesTarget},
 			sync::SyncPoint,
+			vulkan::{VulkanFramebuffer, VulkanRenderer},
 		},
 	},
 	desktop::space::SpaceRenderElements,
@@ -85,8 +85,8 @@ impl RenderFormat {
 }
 
 /// Pick a format the renderer can render into as a DMA-BUF.
-pub(in crate::shell) fn pick_render_format(renderer: &GlesRenderer) -> Result<RenderFormat> {
-	let set = <GlesRenderer as Bind<Dmabuf>>::supported_formats(renderer)
+pub(in crate::shell) fn pick_render_format(renderer: &VulkanRenderer) -> Result<RenderFormat> {
+	let set = <VulkanRenderer as Bind<Dmabuf>>::supported_formats(renderer)
 		.ok_or_else(|| Error::Gpu("renderer exposes no dmabuf render formats".into()))?;
 	[Fourcc::Abgr8888, Fourcc::Argb8888, Fourcc::Xrgb8888]
 		.into_iter()
@@ -98,13 +98,13 @@ pub(in crate::shell) fn pick_render_format(renderer: &GlesRenderer) -> Result<Re
 /// The render target format for HDR output of `kind`, if the renderer can draw
 /// into one: 10-bit for PQ, FP16 for scRGB (ABGR/XBGR 2101010 and 16161616F),
 /// layouts a Vulkan video encoder can import.
-pub(in crate::shell) fn pick_hdr_format(renderer: &GlesRenderer, kind: ContentKind) -> Option<RenderFormat> {
+pub(in crate::shell) fn pick_hdr_format(renderer: &VulkanRenderer, kind: ContentKind) -> Option<RenderFormat> {
 	let codes = match kind {
 		ContentKind::Sdr => return None,
 		ContentKind::Pq => [Fourcc::Abgr2101010, Fourcc::Xbgr2101010],
 		ContentKind::ScRgb => [Fourcc::Abgr16161616f, Fourcc::Xbgr16161616f],
 	};
-	let set = <GlesRenderer as Bind<Dmabuf>>::supported_formats(renderer)?;
+	let set = <VulkanRenderer as Bind<Dmabuf>>::supported_formats(renderer)?;
 	codes.into_iter().find_map(|code| RenderFormat::from_set(&set, code))
 }
 
@@ -117,11 +117,11 @@ render_elements! {
 	/// [`Wrap`] so they can be variants of one enum and drawn in a single pass.
 	/// They are SDR surfaces: over an HDR output they are drawn through the
 	/// [`SdrOnHdr`] conversion.
-	pub FrameRenderElements<=GlesRenderer>;
-	Space=SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>,
-	ScaledSpace=RelocateRenderElement<RescaleRenderElement<SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>>>,
-	ScaledOverlay=SdrOnHdr<RelocateRenderElement<RescaleRenderElement<Wrap<WaylandSurfaceRenderElement<GlesRenderer>>>>>,
-	Cursor=SdrOnHdr<WaylandSurfaceRenderElement<GlesRenderer>>,
+	pub FrameRenderElements<=VulkanRenderer>;
+	Space=SpaceRenderElements<VulkanRenderer, WaylandSurfaceRenderElement<VulkanRenderer>>,
+	ScaledSpace=RelocateRenderElement<RescaleRenderElement<SpaceRenderElements<VulkanRenderer, WaylandSurfaceRenderElement<VulkanRenderer>>>>,
+	ScaledOverlay=SdrOnHdr<RelocateRenderElement<RescaleRenderElement<Wrap<WaylandSurfaceRenderElement<VulkanRenderer>>>>>,
+	Cursor=SdrOnHdr<WaylandSurfaceRenderElement<VulkanRenderer>>,
 }
 
 /// The frame's render elements, front to back.
@@ -141,8 +141,8 @@ pub(in crate::shell) struct FrameScratch {
 /// region that changed since that target was last drawn is redrawn; an
 /// unknown target is redrawn fully.
 pub(in crate::shell) fn render_into(
-	renderer: &mut GlesRenderer,
-	target: &mut GlesTarget<'_>,
+	renderer: &mut VulkanRenderer,
+	target: &mut VulkanFramebuffer,
 	elements: &[FrameRenderElements],
 	damage: &mut FrameDamage,
 	slot: usize,
@@ -166,15 +166,7 @@ pub(in crate::shell) fn render_into(
 
 #[cfg(test)]
 mod gpu_tests {
-	use std::sync::Arc;
-
-	use smithay::backend::{
-		allocator::{
-			Allocator,
-			gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
-		},
-		egl::{EGLContext, EGLDisplay},
-	};
+	use smithay::backend::allocator::Allocator;
 
 	use super::*;
 
@@ -182,16 +174,7 @@ mod gpu_tests {
 	/// reject the driver's preferred DCC modifier.
 	#[test]
 	fn picked_formats_allocate_above_1440p() {
-		let file = std::fs::OpenOptions::new()
-			.read(true)
-			.write(true)
-			.open("/dev/dri/renderD128")
-			.expect("open the render node");
-		let gbm = GbmDevice::new(Arc::new(file)).expect("gbm device");
-		let display = unsafe { EGLDisplay::new(gbm.clone()) }.expect("egl display");
-		let context = EGLContext::new(&display).expect("egl context");
-		let renderer = unsafe { GlesRenderer::new(context) }.expect("gles");
-		let mut allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
+		let (renderer, mut allocator) = crate::shell::render::gpu::test_renderer();
 
 		let formats = std::iter::once(pick_render_format(&renderer).expect("an SDR format"))
 			.chain(pick_hdr_format(&renderer, ContentKind::Pq))

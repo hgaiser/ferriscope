@@ -5,11 +5,8 @@
 //! output, left to right is unchanged. An element placed at output `(x, y)`
 //! must appear at the same `(x, y)` in the PPM.
 //!
-//! `TextureMapping::flipped()` must not be used as a flip signal: for the
-//! `GlesMapping` that `ExportMem::copy_framebuffer` returns it is a constant
-//! `true`, while `glReadPixels` on a target rendered through Smithay's
-//! projection already comes out top-down. Trusting it yields a vertically
-//! mirrored PPM.
+//! `TextureMapping::flipped()` is not used as a flip signal: the readback of a
+//! target rendered through Smithay already comes out top-down.
 //!
 //! The test does not trust any single pixel: it creates a *non-square,
 //! non-centred* override-redirect X11 window at a known `(x, y)` and asserts the

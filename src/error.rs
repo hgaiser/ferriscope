@@ -25,7 +25,7 @@ pub enum Error {
 	Config(String),
 
 	// --- gpu / render -----------------------------------------------------
-	/// A GPU or EGL/GBM resource could not be created or used.
+	/// A GPU (Vulkan or GBM) resource could not be created or used.
 	#[error("gpu: {0}")]
 	Gpu(String),
 
