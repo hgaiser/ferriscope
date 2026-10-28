@@ -62,7 +62,6 @@ use smithay::{
 
 use crate::{
 	action_binding::ActionBindings,
-	colour_management::ColourManagementGlobals,
 	compositor::Ready,
 	config::{CompositorConfig, OutputPlan},
 	cursor::Cursor,
@@ -298,8 +297,6 @@ pub struct FerriscopeState {
 	/// `GAMESCOPE_XWAYLAND_SERVER_ID` and `FERRISCOPE_XWAYLAND_SERVER_ID` and
 	/// named by `override_window_content`. `None` before Xwayland is up.
 	xwayland_server_id: Option<u32>,
-	/// `wp_color_manager_v1` and `frog_color_management_factory_v1`.
-	_colour_globals: ColourManagementGlobals,
 	/// Typing state shared by the input methods (see [`ime`]).
 	ime: ImeTyper,
 	/// Touch routing state (see [`touch`]).
@@ -549,7 +546,6 @@ impl FerriscopeState {
 		let cursor_hide_time = config.seat.cursor_hide_time;
 		let touch_click_mode = config.seat.touch_click_mode;
 		let config_hdr = config.hdr;
-		let colour_globals = ColourManagementGlobals::new(&display_handle, config_hdr);
 
 		let mut state = Self {
 			config,
@@ -637,7 +633,6 @@ impl FerriscopeState {
 			_swapchain_globals: swapchain_globals,
 			swapchain_factories: FactoryRegistry::default(),
 			xwayland_server_id: None,
-			_colour_globals: colour_globals,
 			ime: ImeTyper::default(),
 			touch: TouchState::new(touch_click_mode),
 			pen: PenState::default(),
@@ -794,12 +789,6 @@ impl FerriscopeState {
 		self.child = Some(child);
 		self.watch_child();
 		Ok(())
-	}
-
-	/// Run `f` once the current dispatch is over, for work that cannot happen
-	/// inside a request handler (a destructor event on a just-created object).
-	pub(crate) fn defer(&self, f: impl FnOnce() + 'static) {
-		self.loop_handle.insert_idle(move |_| f());
 	}
 
 	/// Ask the event loop to exit; also used by [`crate::compositor::Compositor::stop`].

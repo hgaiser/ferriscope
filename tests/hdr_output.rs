@@ -1,7 +1,7 @@
 //! GPU integration tests for HDR output.
 //!
-//! A Wayland client declares what its surface holds (`wp_color_management_v1`,
-//! `frog_color_management_v1` or the WSI layer's `gamescope_swapchain`) and
+//! A Wayland client declares what its surface holds through the WSI layer's
+//! `gamescope_swapchain` (the only colour source, as in gamescope) and
 //! presents a buffer of known values. The tests check what the compositor
 //! delivers: the pool format, the `FrameInfo::colour` metadata and, by reading
 //! the DMA-BUF back through a renderer of the test's own, the pixel values.
@@ -49,12 +49,6 @@ use wayland_client::{
 	protocol::{wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface},
 };
 use wayland_protocols::{
-	wp::color_management::v1::client::{
-		wp_color_management_surface_v1::WpColorManagementSurfaceV1,
-		wp_color_manager_v1::{Primaries, RenderIntent, TransferFunction as WpTransferFunction, WpColorManagerV1},
-		wp_image_description_creator_params_v1::WpImageDescriptionCreatorParamsV1,
-		wp_image_description_v1::WpImageDescriptionV1,
-	},
 	wp::linux_dmabuf::zv1::client::{zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1},
 	xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base},
 };
@@ -72,18 +66,6 @@ mod protocols {
 	)]
 	#![allow(clippy::all)]
 
-	pub mod frog {
-		use wayland_client::{self, protocol::*};
-
-		pub mod __interfaces {
-			use wayland_client::protocol::__interfaces::*;
-			wayland_scanner::generate_interfaces!("protocol/frog-color-management-v1.xml");
-		}
-		use self::__interfaces::*;
-
-		wayland_scanner::generate_client_code!("protocol/frog-color-management-v1.xml");
-	}
-
 	pub mod swapchain {
 		use wayland_client::{self, protocol::*};
 
@@ -97,10 +79,7 @@ mod protocols {
 	}
 }
 
-use protocols::{
-	frog::{frog_color_managed_surface, frog_color_management_factory_v1},
-	swapchain::{gamescope_swapchain, gamescope_swapchain_factory_v2},
-};
+use protocols::swapchain::{gamescope_swapchain, gamescope_swapchain_factory_v2};
 
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
@@ -108,24 +87,23 @@ const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_TIMEOUT: Duration = Duration::from_secs(30);
 const RENDER_NODE: &str = "/dev/dri/renderD128";
 
+/// `VK_COLOR_SPACE_SRGB_NONLINEAR_KHR`.
+const VK_SRGB: u32 = 0;
 /// `VK_COLOR_SPACE_HDR10_ST2084_EXT`.
 const VK_HDR10: u32 = 1_000_104_008;
+/// `VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT`.
+const VK_SCRGB: u32 = 1_000_104_002;
 
 /// What a client declares about its surface.
 #[derive(Clone, Copy, PartialEq)]
 enum Declare {
-	/// Nothing: the surface is SDR.
+	/// Nothing: the surface is SDR (an sRGB swapchain, if it had one).
 	Nothing,
-	/// `wp_color_management_v1`: HDR10 with mastering 1000 cd/m2, CLL 900 and
-	/// FALL 300.
-	WpPq,
-	/// `wp_color_management_v1`: scRGB.
-	WpScRgb,
-	/// `frog_color_management_v1`: HDR10.
-	FrogPq,
-	/// The WSI layer: an HDR10 swapchain with `set_hdr_metadata` (CLL 700), on
-	/// top of a `wp` description saying CLL 900.
+	/// The WSI layer: an HDR10 swapchain with `set_hdr_metadata` (mastering
+	/// 1000 cd/m2, CLL 700 and FALL 250).
 	SwapchainPq,
+	/// The WSI layer: an scRGB swapchain without metadata.
+	SwapchainScRgb,
 }
 
 struct Session {
@@ -302,6 +280,11 @@ fn abgr2101010(r: u32, g: u32, b: u32, a: u32) -> u32 {
 	(a << 30) | (b << 20) | (g << 10) | r
 }
 
+/// A packed `Argb2101010` word: 10 bits each of red, green and blue, 2 of alpha.
+fn argb2101010(r: u32, g: u32, b: u32, a: u32) -> u32 {
+	(a << 30) | (r << 20) | (g << 10) | b
+}
+
 /// IEEE half-precision encoding of values that are exactly representable.
 fn half(value: f32) -> u16 {
 	let bits = value.to_bits();
@@ -321,8 +304,6 @@ struct Client {
 	state: State,
 	globals: GlobalList,
 	surface: wl_surface::WlSurface,
-	colour_surface: Option<WpColorManagementSurfaceV1>,
-	frog: Option<frog_color_managed_surface::FrogColorManagedSurface>,
 	swapchain: Option<gamescope_swapchain::GamescopeSwapchain>,
 	keep: Vec<(wl_shm_pool::WlShmPool, wl_buffer::WlBuffer)>,
 	dmabufs: Vec<wl_buffer::WlBuffer>,
@@ -357,8 +338,6 @@ impl Client {
 			state,
 			globals,
 			surface,
-			colour_surface: None,
-			frog: None,
 			swapchain: None,
 			keep: Vec::new(),
 			dmabufs: Vec::new(),
@@ -377,64 +356,27 @@ impl Client {
 	/// Declare `declare` for the surface; takes effect with the next commit.
 	fn declare(&mut self, declare: Declare) {
 		let qh = self.qh();
-		if matches!(declare, Declare::WpPq | Declare::WpScRgb | Declare::SwapchainPq) {
-			let manager: WpColorManagerV1 = self.globals.bind(&qh, 1..=3, ()).expect("wp_color_manager_v1");
-			let colour_surface = self
-				.colour_surface
-				.get_or_insert_with(|| manager.get_surface(&self.surface, &qh, ()))
-				.clone();
-			let creator = manager.create_parametric_creator(&qh, ());
-			match declare {
-				Declare::WpScRgb => {
-					creator.set_tf_named(WpTransferFunction::ExtLinear);
-					creator.set_primaries_named(Primaries::Srgb);
-				},
-				_ => {
-					creator.set_tf_named(WpTransferFunction::St2084Pq);
-					creator.set_primaries_named(Primaries::Bt2020);
-					creator.set_mastering_display_primaries(
-						708_000, 292_000, 170_000, 797_000, 131_000, 46_000, 312_700, 329_000,
-					);
-					creator.set_mastering_luminance(50, 1000);
-					creator.set_max_cll(900);
-					creator.set_max_fall(300);
-				},
-			}
-			let description = creator.create(&qh, ());
-			colour_surface.set_image_description(&description, RenderIntent::Perceptual);
-		}
-		if declare == Declare::FrogPq {
-			let factory: frog_color_management_factory_v1::FrogColorManagementFactoryV1 = self
-				.globals
-				.bind(&qh, 1..=1, ())
-				.expect("frog_color_management_factory_v1");
-			let frog = self
-				.frog
-				.get_or_insert_with(|| factory.get_color_managed_surface(&self.surface, &qh, ()))
-				.clone();
-			frog.set_known_transfer_function(frog_color_managed_surface::TransferFunction::St2084Pq);
-			frog.set_known_container_color_volume(frog_color_managed_surface::Primaries::Rec2020);
-			frog.set_hdr_metadata(34000, 16000, 13250, 34500, 7500, 3000, 15635, 16450, 1000, 50, 800, 200);
-		}
+		let (vk_format, vk_colorspace) = match declare {
+			// No swapchain yet: nothing to declare.
+			Declare::Nothing if self.swapchain.is_none() => return,
+			// `VK_FORMAT_B8G8R8A8_UNORM`.
+			Declare::Nothing => (44, VK_SRGB),
+			// `VK_FORMAT_A2B10G10R10_UNORM_PACK32`.
+			Declare::SwapchainPq => (64, VK_HDR10),
+			// `VK_FORMAT_R16G16B16A16_SFLOAT`.
+			Declare::SwapchainScRgb => (97, VK_SCRGB),
+		};
+		let factory: gamescope_swapchain_factory_v2::GamescopeSwapchainFactoryV2 = self
+			.globals
+			.bind(&qh, 1..=1, ())
+			.expect("gamescope_swapchain_factory_v2");
+		let swapchain = self
+			.swapchain
+			.get_or_insert_with(|| factory.create_swapchain(&self.surface, &qh, ()))
+			.clone();
+		swapchain.swapchain_feedback(3, vk_format, vk_colorspace, 1, 1, 1, "test-engine".to_string());
 		if declare == Declare::SwapchainPq {
-			let factory: gamescope_swapchain_factory_v2::GamescopeSwapchainFactoryV2 = self
-				.globals
-				.bind(&qh, 1..=1, ())
-				.expect("gamescope_swapchain_factory_v2");
-			let swapchain = self
-				.swapchain
-				.get_or_insert_with(|| factory.create_swapchain(&self.surface, &qh, ()))
-				.clone();
-			swapchain.swapchain_feedback(3, 64, VK_HDR10, 1, 1, 1, "test-engine".to_string());
 			swapchain.set_hdr_metadata(34000, 16000, 13250, 34500, 7500, 3000, 15635, 16450, 1000, 50, 700, 250);
-		}
-		if declare == Declare::Nothing {
-			if let Some(colour_surface) = &self.colour_surface {
-				colour_surface.unset_image_description();
-			}
-			if let Some(frog) = self.frog.take() {
-				frog.destroy();
-			}
 		}
 	}
 
@@ -645,16 +587,10 @@ delegate_noop!(State: ignore zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1);
 delegate_noop!(State: ignore zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1);
 delegate_noop!(State: ignore wl_buffer::WlBuffer);
 delegate_noop!(State: ignore wl_surface::WlSurface);
-delegate_noop!(State: ignore WpColorManagerV1);
-delegate_noop!(State: ignore WpColorManagementSurfaceV1);
-delegate_noop!(State: ignore WpImageDescriptionCreatorParamsV1);
-delegate_noop!(State: ignore WpImageDescriptionV1);
-delegate_noop!(State: ignore frog_color_management_factory_v1::FrogColorManagementFactoryV1);
-delegate_noop!(State: ignore frog_color_managed_surface::FrogColorManagedSurface);
 delegate_noop!(State: ignore gamescope_swapchain_factory_v2::GamescopeSwapchainFactoryV2);
 delegate_noop!(State: ignore gamescope_swapchain::GamescopeSwapchain);
 
-/// An `Xbgr2101010` buffer of the output's size, cleared to `colour` by
+/// A `fourcc` buffer of the output's size, cleared to `colour` by
 /// `renderer`, in a tiled layout the renderer can render to.
 fn dmabuf_cleared_to(renderer: &mut VulkanRenderer, colour: [f32; 4]) -> Dmabuf {
 	let file = std::fs::OpenOptions::new()
@@ -727,7 +663,7 @@ fn hdr10_content_switches_the_pool_to_10_bit_pq_and_back() {
 	drop(frame);
 
 	// HDR10: red 512, green 256, blue 768 of 1023.
-	client.declare(Declare::WpPq);
+	client.declare(Declare::SwapchainPq);
 	let word = abgr2101010(512, 256, 768, 3);
 	client.present(wl_shm::Format::Abgr2101010, &word.to_le_bytes(), 160, 120);
 	let (colour, frame) = session.frame_where(|dmabuf| dmabuf.dmabuf.format().code == Fourcc::Abgr2101010);
@@ -740,10 +676,10 @@ fn hdr10_content_switches_the_pool_to_10_bit_pq_and_back() {
 		"{}",
 		mastering.min_luminance
 	);
-	assert!((mastering.red.x - 0.708).abs() < 1e-3, "{}", mastering.red.x);
+	assert!((mastering.red.x - 0.68).abs() < 1e-3, "{}", mastering.red.x);
 	assert!((mastering.white_point.y - 0.329).abs() < 1e-3);
 	let light = colour.content_light.expect("content light level");
-	assert_eq!((light.max_cll, light.max_fall), (900, 300));
+	assert_eq!((light.max_cll, light.max_fall), (700, 250));
 
 	let floats = reader.read(&frame);
 	for (x, y) in [
@@ -756,7 +692,7 @@ fn hdr10_content_switches_the_pool_to_10_bit_pq_and_back() {
 	}
 	drop(frame);
 
-	// Back to SDR: the description goes away and the 8-bit pool returns.
+	// Back to SDR: the swapchain turns sRGB and the 8-bit pool returns.
 	client.declare(Declare::Nothing);
 	client.present(wl_shm::Format::Argb8888, &SDR_PIXEL, 200, 150);
 	let (colour, frame) = session.frame_where(|dmabuf| dmabuf.dmabuf.format().code != Fourcc::Abgr2101010);
@@ -777,7 +713,7 @@ fn scrgb_content_switches_the_pool_to_fp16_and_keeps_values_above_one() {
 	let mut reader = Reader::new();
 	let mut client = session.client();
 
-	client.declare(Declare::WpScRgb);
+	client.declare(Declare::SwapchainScRgb);
 	let values = [1.0f32, 2.5, 0.25, 1.0];
 	let pixel_bytes: Vec<u8> = values.iter().flat_map(|value| half(*value).to_le_bytes()).collect();
 	client.present(wl_shm::Format::Abgr16161616f, &pixel_bytes, 160, 120);
@@ -797,37 +733,6 @@ fn scrgb_content_switches_the_pool_to_fp16_and_keeps_values_above_one() {
 
 #[test]
 #[ignore = "requires GPU"]
-fn frog_declared_hdr10_switches_the_pool() {
-	let session = Session::start(true);
-	let mut client = session.client();
-	client.declare(Declare::FrogPq);
-	let word = abgr2101010(100, 200, 300, 3);
-	client.present(wl_shm::Format::Abgr2101010, &word.to_le_bytes(), 160, 120);
-	client.surface.commit();
-	let (colour, _frame) = session.frame_where(|dmabuf| dmabuf.dmabuf.format().code == Fourcc::Abgr2101010);
-	assert_eq!(colour.transfer, TransferFunction::Pq);
-	let light = colour.content_light.expect("content light level");
-	assert_eq!((light.max_cll, light.max_fall), (800, 200));
-}
-
-#[test]
-#[ignore = "requires GPU"]
-fn the_wsi_swapchain_metadata_wins_over_the_protocol_description() {
-	let session = Session::start(true);
-	let mut client = session.client();
-	// The protocol says CLL 900; the WSI layer's `set_hdr_metadata` says 700.
-	client.declare(Declare::WpPq);
-	client.declare(Declare::SwapchainPq);
-	let word = abgr2101010(100, 200, 300, 3);
-	client.present(wl_shm::Format::Abgr2101010, &word.to_le_bytes(), 160, 120);
-	let (colour, _frame) = session.frame_where(|dmabuf| dmabuf.dmabuf.format().code == Fourcc::Abgr2101010);
-	assert_eq!(colour.transfer, TransferFunction::Pq);
-	let light = colour.content_light.expect("content light level");
-	assert_eq!((light.max_cll, light.max_fall), (700, 250));
-}
-
-#[test]
-#[ignore = "requires GPU"]
 fn nothing_changes_when_hdr_is_not_enabled() {
 	let session = Session::start(false);
 	assert!(!session.ready.hdr);
@@ -836,8 +741,8 @@ fn nothing_changes_when_hdr_is_not_enabled() {
 		"DXVK_HDR is advertised with HDR off"
 	);
 	let mut client = session.client();
-	// Frog accepts the declaration even when HDR is off; the output stays SDR.
-	client.declare(Declare::FrogPq);
+	// The swapchain declares HDR10 although HDR is off; the output stays SDR.
+	client.declare(Declare::SwapchainPq);
 	let word = abgr2101010(100, 200, 300, 3);
 	client.present(wl_shm::Format::Abgr2101010, &word.to_le_bytes(), 160, 120);
 	let (colour, frame) = session.frame_where(|_| true);
@@ -858,7 +763,7 @@ fn an_hdr_game_dmabuf_is_passed_through_with_its_metadata() {
 	let session = Session::start(true);
 	let mut reader = Reader::new();
 	let mut client = session.client();
-	client.declare(Declare::WpPq);
+	client.declare(Declare::SwapchainPq);
 	let buffer = dmabuf_cleared_to(&mut reader.renderer, unorm10(512, 256, 768));
 	client.present_dmabuf(&buffer);
 
@@ -878,7 +783,27 @@ fn an_hdr_game_dmabuf_is_passed_through_with_its_metadata() {
 	assert_eq!(colour.primaries, ColourPrimaries::Bt2020);
 	assert_eq!(colour.mastering.expect("mastering metadata").max_luminance, 1000.0);
 	let light = colour.content_light.expect("content light level");
-	assert_eq!((light.max_cll, light.max_fall), (900, 300));
+	assert_eq!((light.max_cll, light.max_fall), (700, 250));
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn an_argb2101010_hdr_buffer_is_composited_with_its_channel_order() {
+	let session = Session::start(true);
+	let mut reader = Reader::new();
+	let mut client = session.client();
+	client.declare(Declare::SwapchainPq);
+	// The other HDR10 format the WSI layer offers (`A2R10G10B10_UNORM_PACK32`):
+	// not passed through, so it is composited into the `Abgr2101010` pool.
+	let word = argb2101010(512, 256, 768, 3);
+	client.present(wl_shm::Format::Argb2101010, &word.to_le_bytes(), 160, 120);
+
+	let (_colour, frame) = session.frame_where(|dmabuf| dmabuf.dmabuf.format().code == Fourcc::Abgr2101010);
+	let centre = pixel(&reader.read(&frame), WIDTH as usize / 2, HEIGHT as usize / 2);
+	assert!(
+		close(centre, unorm10(512, 256, 768), 0.5 / 1023.0),
+		"centre pixel is {centre:?}"
+	);
 }
 
 #[test]
@@ -888,7 +813,7 @@ fn sdr_cursor_over_hdr_content_is_drawn_at_the_sdr_white_level() {
 	let mut reader = Reader::new();
 	let mut client = session.client();
 
-	client.declare(Declare::WpScRgb);
+	client.declare(Declare::SwapchainScRgb);
 	let values = [1.0f32, 2.5, 0.25, 1.0];
 	let content: Vec<u8> = values.iter().flat_map(|value| half(*value).to_le_bytes()).collect();
 	client.present(wl_shm::Format::Abgr16161616f, &content, 160, 120);

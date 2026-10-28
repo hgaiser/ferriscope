@@ -41,13 +41,11 @@
 //! | Pen input via `zwp_tablet_v2` (ferriscope extension) | `shell::pen` |
 //! | Steam on-screen keyboard (`gamescope_input_method`) | `ime` |
 //! | Colour / HDR metadata | `colour_meta` |
-//! | Colour management protocols (`wp_color_management_v1`, frog) | `colour_management` |
-//! | HDR content classification (swapchain + protocols) | `hdr` |
+//! | HDR content classification (WSI swapchain) | `hdr` |
 
 #![deny(missing_docs)]
 
 mod action_binding;
-mod colour_management;
 mod colour_meta;
 mod compositor;
 mod config;
