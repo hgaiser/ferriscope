@@ -1,7 +1,7 @@
 //! GPU integration tests for HDR output.
 //!
-//! A Wayland client declares what its surface holds (`wp_color_management_v1`,
-//! `frog_color_management_v1` or the WSI layer's `gamescope_swapchain`) and
+//! A Wayland client declares what its surface holds through the WSI layer's
+//! `gamescope_swapchain` (the only colour source, as in gamescope) and
 //! presents a buffer of known values. The tests check what the compositor
 //! delivers: the pool format, the `FrameInfo::colour` metadata and, by reading
 //! the DMA-BUF back through a renderer of the test's own, the pixel values.
@@ -33,17 +33,15 @@ use smithay::{
 			dmabuf::{AsDmabuf, Dmabuf},
 			gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
 		},
-		egl::{EGLContext, EGLDisplay},
-		renderer::{
-			Bind, Color32F, Frame as _, ImportDma, Renderer,
-			gles::{GlesRenderer, ffi},
-		},
+		drm::{DrmDeviceFd, DrmNode},
+		renderer::{Bind, Color32F, ExportMem, Frame as _, ImportDma, Renderer, vulkan::VulkanRenderer},
+		vulkan::{Instance, PhysicalDevice, version::Version},
 	},
 	reexports::rustix::{
 		event::{PollFd, PollFlags, Timespec, poll},
 		mm::{MapFlags, ProtFlags, mmap, munmap},
 	},
-	utils::{Physical, Rectangle, Size, Transform},
+	utils::{DeviceFd, Physical, Rectangle, Size, Transform},
 };
 use wayland_client::{
 	Connection, Dispatch, QueueHandle, delegate_noop,
@@ -51,12 +49,6 @@ use wayland_client::{
 	protocol::{wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface},
 };
 use wayland_protocols::{
-	wp::color_management::v1::client::{
-		wp_color_management_surface_v1::WpColorManagementSurfaceV1,
-		wp_color_manager_v1::{Primaries, RenderIntent, TransferFunction as WpTransferFunction, WpColorManagerV1},
-		wp_image_description_creator_params_v1::WpImageDescriptionCreatorParamsV1,
-		wp_image_description_v1::WpImageDescriptionV1,
-	},
 	wp::linux_dmabuf::zv1::client::{zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1},
 	xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base},
 };
@@ -74,18 +66,6 @@ mod protocols {
 	)]
 	#![allow(clippy::all)]
 
-	pub mod frog {
-		use wayland_client::{self, protocol::*};
-
-		pub mod __interfaces {
-			use wayland_client::protocol::__interfaces::*;
-			wayland_scanner::generate_interfaces!("protocol/frog-color-management-v1.xml");
-		}
-		use self::__interfaces::*;
-
-		wayland_scanner::generate_client_code!("protocol/frog-color-management-v1.xml");
-	}
-
 	pub mod swapchain {
 		use wayland_client::{self, protocol::*};
 
@@ -99,10 +79,7 @@ mod protocols {
 	}
 }
 
-use protocols::{
-	frog::{frog_color_managed_surface, frog_color_management_factory_v1},
-	swapchain::{gamescope_swapchain, gamescope_swapchain_factory_v2},
-};
+use protocols::swapchain::{gamescope_swapchain, gamescope_swapchain_factory_v2};
 
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
@@ -110,24 +87,23 @@ const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_TIMEOUT: Duration = Duration::from_secs(30);
 const RENDER_NODE: &str = "/dev/dri/renderD128";
 
+/// `VK_COLOR_SPACE_SRGB_NONLINEAR_KHR`.
+const VK_SRGB: u32 = 0;
 /// `VK_COLOR_SPACE_HDR10_ST2084_EXT`.
 const VK_HDR10: u32 = 1_000_104_008;
+/// `VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT`.
+const VK_SCRGB: u32 = 1_000_104_002;
 
 /// What a client declares about its surface.
 #[derive(Clone, Copy, PartialEq)]
 enum Declare {
-	/// Nothing: the surface is SDR.
+	/// Nothing: the surface is SDR (an sRGB swapchain, if it had one).
 	Nothing,
-	/// `wp_color_management_v1`: HDR10 with mastering 1000 cd/m2, CLL 900 and
-	/// FALL 300.
-	WpPq,
-	/// `wp_color_management_v1`: scRGB.
-	WpScRgb,
-	/// `frog_color_management_v1`: HDR10.
-	FrogPq,
-	/// The WSI layer: an HDR10 swapchain with `set_hdr_metadata` (CLL 700), on
-	/// top of a `wp` description saying CLL 900.
+	/// The WSI layer: an HDR10 swapchain with `set_hdr_metadata` (mastering
+	/// 1000 cd/m2, CLL 700 and FALL 250).
 	SwapchainPq,
+	/// The WSI layer: an scRGB swapchain without metadata.
+	SwapchainScRgb,
 }
 
 struct Session {
@@ -193,20 +169,26 @@ impl Drop for Session {
 
 /// Reads delivered DMA-BUFs back through a renderer of the test's own.
 struct Reader {
-	renderer: GlesRenderer,
+	renderer: VulkanRenderer,
 }
 
 impl Reader {
 	fn new() -> Self {
+		use std::os::unix::fs::MetadataExt;
+
 		let file = std::fs::OpenOptions::new()
 			.read(true)
 			.write(true)
 			.open(RENDER_NODE)
 			.expect("open the render node");
-		let gbm = GbmDevice::new(Arc::new(file)).expect("gbm device");
-		let display = unsafe { EGLDisplay::new(gbm) }.expect("egl display");
-		let context = EGLContext::new(&display).expect("egl context");
-		let renderer = unsafe { GlesRenderer::new(context) }.expect("gles");
+		let node = DrmNode::from_dev_id(file.metadata().expect("stat the render node").rdev()).expect("drm node");
+		let instance = Instance::new(Version::VERSION_1_3, None).expect("vulkan instance");
+		let phd = PhysicalDevice::enumerate(&instance)
+			.expect("enumerate vulkan devices")
+			.find(|phd| phd.render_node().ok().flatten() == Some(node))
+			.expect("a vulkan device for the render node");
+		let drm = DrmDeviceFd::new(DeviceFd::from(std::os::fd::OwnedFd::from(file)));
+		let renderer = VulkanRenderer::new(&phd, Some(drm)).expect("vulkan renderer");
 		Self { renderer }
 	}
 
@@ -231,72 +213,49 @@ impl Reader {
 			.renderer
 			.import_dmabuf(&frame.dmabuf, None)
 			.expect("import the delivered dmabuf");
-		let id = texture.tex_id();
 		let fourcc = frame.dmabuf.format().code;
-		let mut floats = vec![0f32; (WIDTH * HEIGHT * 4) as usize];
-		self.renderer
-			.with_context(|gl| unsafe {
-				let mut fbo = 0;
-				gl.GenFramebuffers(1, &mut fbo);
-				gl.BindFramebuffer(ffi::FRAMEBUFFER, fbo);
-				gl.FramebufferTexture2D(ffi::FRAMEBUFFER, ffi::COLOR_ATTACHMENT0, ffi::TEXTURE_2D, id, 0);
-				assert_eq!(
-					gl.CheckFramebufferStatus(ffi::FRAMEBUFFER),
-					ffi::FRAMEBUFFER_COMPLETE,
-					"the delivered dmabuf cannot be a framebuffer"
-				);
-				match fourcc {
-					Fourcc::Abgr16161616f => gl.ReadPixels(
-						0,
-						0,
-						WIDTH as i32,
-						HEIGHT as i32,
-						ffi::RGBA,
-						ffi::FLOAT,
-						floats.as_mut_ptr().cast(),
-					),
-					Fourcc::Abgr2101010 => {
-						let mut words = vec![0u32; (WIDTH * HEIGHT) as usize];
-						gl.ReadPixels(
-							0,
-							0,
-							WIDTH as i32,
-							HEIGHT as i32,
-							ffi::RGBA,
-							ffi::UNSIGNED_INT_2_10_10_10_REV,
-							words.as_mut_ptr().cast(),
-						);
-						for (word, out) in words.iter().zip(floats.as_chunks_mut::<4>().0) {
-							out.copy_from_slice(&[
-								(word & 0x3ff) as f32 / 1023.0,
-								((word >> 10) & 0x3ff) as f32 / 1023.0,
-								((word >> 20) & 0x3ff) as f32 / 1023.0,
-								(word >> 30) as f32 / 3.0,
-							]);
-						}
-					},
-					_ => {
-						let mut bytes = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-						gl.ReadPixels(
-							0,
-							0,
-							WIDTH as i32,
-							HEIGHT as i32,
-							ffi::RGBA,
-							ffi::UNSIGNED_BYTE,
-							bytes.as_mut_ptr().cast(),
-						);
-						for (byte, out) in bytes.iter().zip(floats.iter_mut()) {
-							*out = f32::from(*byte) / 255.0;
-						}
-					},
-				}
-				assert_eq!(gl.GetError(), ffi::NO_ERROR, "glReadPixels failed");
-				gl.BindFramebuffer(ffi::FRAMEBUFFER, 0);
-				gl.DeleteFramebuffers(1, &fbo);
-			})
-			.expect("gl context");
-		floats
+		let region = Rectangle::from_size((WIDTH as i32, HEIGHT as i32).into());
+		let mapping = self
+			.renderer
+			.copy_texture(&texture, region, fourcc)
+			.expect("read the delivered dmabuf back");
+		let bytes = self.renderer.map_texture(&mapping).expect("map the readback");
+		match fourcc {
+			Fourcc::Abgr16161616f | Fourcc::Xbgr16161616f => bytes
+				.as_chunks::<2>()
+				.0
+				.iter()
+				.map(|half| f16_to_f32(u16::from_le_bytes(*half)))
+				.collect(),
+			Fourcc::Abgr2101010 | Fourcc::Xbgr2101010 => bytes
+				.as_chunks::<4>()
+				.0
+				.iter()
+				.flat_map(|word| {
+					let word = u32::from_le_bytes(*word);
+					[
+						(word & 0x3ff) as f32 / 1023.0,
+						((word >> 10) & 0x3ff) as f32 / 1023.0,
+						((word >> 20) & 0x3ff) as f32 / 1023.0,
+						(word >> 30) as f32 / 3.0,
+					]
+				})
+				.collect(),
+			// Abgr8888: R, G, B, A bytes in memory.
+			_ => bytes.iter().map(|byte| f32::from(*byte) / 255.0).collect(),
+		}
+	}
+}
+
+/// An IEEE 754 half-precision float.
+fn f16_to_f32(bits: u16) -> f32 {
+	let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+	let exponent = i32::from((bits >> 10) & 0x1f);
+	let mantissa = f32::from(bits & 0x3ff);
+	sign * match exponent {
+		0 => mantissa * 2f32.powi(-24),
+		31 => f32::INFINITY,
+		_ => (1.0 + mantissa / 1024.0) * 2f32.powi(exponent - 15),
 	}
 }
 
@@ -321,6 +280,11 @@ fn abgr2101010(r: u32, g: u32, b: u32, a: u32) -> u32 {
 	(a << 30) | (b << 20) | (g << 10) | r
 }
 
+/// A packed `Argb2101010` word: 10 bits each of red, green and blue, 2 of alpha.
+fn argb2101010(r: u32, g: u32, b: u32, a: u32) -> u32 {
+	(a << 30) | (r << 20) | (g << 10) | b
+}
+
 /// IEEE half-precision encoding of values that are exactly representable.
 fn half(value: f32) -> u16 {
 	let bits = value.to_bits();
@@ -340,8 +304,6 @@ struct Client {
 	state: State,
 	globals: GlobalList,
 	surface: wl_surface::WlSurface,
-	colour_surface: Option<WpColorManagementSurfaceV1>,
-	frog: Option<frog_color_managed_surface::FrogColorManagedSurface>,
 	swapchain: Option<gamescope_swapchain::GamescopeSwapchain>,
 	keep: Vec<(wl_shm_pool::WlShmPool, wl_buffer::WlBuffer)>,
 	dmabufs: Vec<wl_buffer::WlBuffer>,
@@ -376,8 +338,6 @@ impl Client {
 			state,
 			globals,
 			surface,
-			colour_surface: None,
-			frog: None,
 			swapchain: None,
 			keep: Vec::new(),
 			dmabufs: Vec::new(),
@@ -396,64 +356,27 @@ impl Client {
 	/// Declare `declare` for the surface; takes effect with the next commit.
 	fn declare(&mut self, declare: Declare) {
 		let qh = self.qh();
-		if matches!(declare, Declare::WpPq | Declare::WpScRgb | Declare::SwapchainPq) {
-			let manager: WpColorManagerV1 = self.globals.bind(&qh, 1..=3, ()).expect("wp_color_manager_v1");
-			let colour_surface = self
-				.colour_surface
-				.get_or_insert_with(|| manager.get_surface(&self.surface, &qh, ()))
-				.clone();
-			let creator = manager.create_parametric_creator(&qh, ());
-			match declare {
-				Declare::WpScRgb => {
-					creator.set_tf_named(WpTransferFunction::ExtLinear);
-					creator.set_primaries_named(Primaries::Srgb);
-				},
-				_ => {
-					creator.set_tf_named(WpTransferFunction::St2084Pq);
-					creator.set_primaries_named(Primaries::Bt2020);
-					creator.set_mastering_display_primaries(
-						708_000, 292_000, 170_000, 797_000, 131_000, 46_000, 312_700, 329_000,
-					);
-					creator.set_mastering_luminance(50, 1000);
-					creator.set_max_cll(900);
-					creator.set_max_fall(300);
-				},
-			}
-			let description = creator.create(&qh, ());
-			colour_surface.set_image_description(&description, RenderIntent::Perceptual);
-		}
-		if declare == Declare::FrogPq {
-			let factory: frog_color_management_factory_v1::FrogColorManagementFactoryV1 = self
-				.globals
-				.bind(&qh, 1..=1, ())
-				.expect("frog_color_management_factory_v1");
-			let frog = self
-				.frog
-				.get_or_insert_with(|| factory.get_color_managed_surface(&self.surface, &qh, ()))
-				.clone();
-			frog.set_known_transfer_function(frog_color_managed_surface::TransferFunction::St2084Pq);
-			frog.set_known_container_color_volume(frog_color_managed_surface::Primaries::Rec2020);
-			frog.set_hdr_metadata(34000, 16000, 13250, 34500, 7500, 3000, 15635, 16450, 1000, 50, 800, 200);
-		}
+		let (vk_format, vk_colorspace) = match declare {
+			// No swapchain yet: nothing to declare.
+			Declare::Nothing if self.swapchain.is_none() => return,
+			// `VK_FORMAT_B8G8R8A8_UNORM`.
+			Declare::Nothing => (44, VK_SRGB),
+			// `VK_FORMAT_A2B10G10R10_UNORM_PACK32`.
+			Declare::SwapchainPq => (64, VK_HDR10),
+			// `VK_FORMAT_R16G16B16A16_SFLOAT`.
+			Declare::SwapchainScRgb => (97, VK_SCRGB),
+		};
+		let factory: gamescope_swapchain_factory_v2::GamescopeSwapchainFactoryV2 = self
+			.globals
+			.bind(&qh, 1..=1, ())
+			.expect("gamescope_swapchain_factory_v2");
+		let swapchain = self
+			.swapchain
+			.get_or_insert_with(|| factory.create_swapchain(&self.surface, &qh, ()))
+			.clone();
+		swapchain.swapchain_feedback(3, vk_format, vk_colorspace, 1, 1, 1, "test-engine".to_string());
 		if declare == Declare::SwapchainPq {
-			let factory: gamescope_swapchain_factory_v2::GamescopeSwapchainFactoryV2 = self
-				.globals
-				.bind(&qh, 1..=1, ())
-				.expect("gamescope_swapchain_factory_v2");
-			let swapchain = self
-				.swapchain
-				.get_or_insert_with(|| factory.create_swapchain(&self.surface, &qh, ()))
-				.clone();
-			swapchain.swapchain_feedback(3, 64, VK_HDR10, 1, 1, 1, "test-engine".to_string());
 			swapchain.set_hdr_metadata(34000, 16000, 13250, 34500, 7500, 3000, 15635, 16450, 1000, 50, 700, 250);
-		}
-		if declare == Declare::Nothing {
-			if let Some(colour_surface) = &self.colour_surface {
-				colour_surface.unset_image_description();
-			}
-			if let Some(frog) = self.frog.take() {
-				frog.destroy();
-			}
 		}
 	}
 
@@ -664,20 +587,12 @@ delegate_noop!(State: ignore zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1);
 delegate_noop!(State: ignore zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1);
 delegate_noop!(State: ignore wl_buffer::WlBuffer);
 delegate_noop!(State: ignore wl_surface::WlSurface);
-delegate_noop!(State: ignore WpColorManagerV1);
-delegate_noop!(State: ignore WpColorManagementSurfaceV1);
-delegate_noop!(State: ignore WpImageDescriptionCreatorParamsV1);
-delegate_noop!(State: ignore WpImageDescriptionV1);
-delegate_noop!(State: ignore frog_color_management_factory_v1::FrogColorManagementFactoryV1);
-delegate_noop!(State: ignore frog_color_managed_surface::FrogColorManagedSurface);
 delegate_noop!(State: ignore gamescope_swapchain_factory_v2::GamescopeSwapchainFactoryV2);
 delegate_noop!(State: ignore gamescope_swapchain::GamescopeSwapchain);
 
-/// An `Xbgr2101010` buffer of the output's size, cleared to `colour` by
-/// `renderer`, in a layout the renderer can render to (NVIDIA's EGL takes a
-/// linear 10-bit buffer only as an external image, which the composite cannot
-/// sample).
-fn dmabuf_cleared_to(renderer: &mut GlesRenderer, colour: [f32; 4]) -> Dmabuf {
+/// A `fourcc` buffer of the output's size, cleared to `colour` by
+/// `renderer`, in a tiled layout the renderer can render to.
+fn dmabuf_cleared_to(renderer: &mut VulkanRenderer, colour: [f32; 4]) -> Dmabuf {
 	let file = std::fs::OpenOptions::new()
 		.read(true)
 		.write(true)
@@ -685,9 +600,8 @@ fn dmabuf_cleared_to(renderer: &mut GlesRenderer, colour: [f32; 4]) -> Dmabuf {
 		.expect("open the render node");
 	let gbm = GbmDevice::new(Arc::new(file)).expect("gbm device");
 	let mut allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
-	let modifiers: Vec<Modifier> = renderer
-		.egl_context()
-		.dmabuf_render_formats()
+	let modifiers: Vec<Modifier> = Bind::<Dmabuf>::supported_formats(renderer)
+		.expect("render formats")
 		.iter()
 		.filter(|format| format.code == SmithayFourcc::Xbgr2101010 && format.modifier != Modifier::Linear)
 		.map(|format| format.modifier)
@@ -749,7 +663,7 @@ fn hdr10_content_switches_the_pool_to_10_bit_pq_and_back() {
 	drop(frame);
 
 	// HDR10: red 512, green 256, blue 768 of 1023.
-	client.declare(Declare::WpPq);
+	client.declare(Declare::SwapchainPq);
 	let word = abgr2101010(512, 256, 768, 3);
 	client.present(wl_shm::Format::Abgr2101010, &word.to_le_bytes(), 160, 120);
 	let (colour, frame) = session.frame_where(|dmabuf| dmabuf.dmabuf.format().code == Fourcc::Abgr2101010);
@@ -762,10 +676,10 @@ fn hdr10_content_switches_the_pool_to_10_bit_pq_and_back() {
 		"{}",
 		mastering.min_luminance
 	);
-	assert!((mastering.red.x - 0.708).abs() < 1e-3, "{}", mastering.red.x);
+	assert!((mastering.red.x - 0.68).abs() < 1e-3, "{}", mastering.red.x);
 	assert!((mastering.white_point.y - 0.329).abs() < 1e-3);
 	let light = colour.content_light.expect("content light level");
-	assert_eq!((light.max_cll, light.max_fall), (900, 300));
+	assert_eq!((light.max_cll, light.max_fall), (700, 250));
 
 	let floats = reader.read(&frame);
 	for (x, y) in [
@@ -778,7 +692,7 @@ fn hdr10_content_switches_the_pool_to_10_bit_pq_and_back() {
 	}
 	drop(frame);
 
-	// Back to SDR: the description goes away and the 8-bit pool returns.
+	// Back to SDR: the swapchain turns sRGB and the 8-bit pool returns.
 	client.declare(Declare::Nothing);
 	client.present(wl_shm::Format::Argb8888, &SDR_PIXEL, 200, 150);
 	let (colour, frame) = session.frame_where(|dmabuf| dmabuf.dmabuf.format().code != Fourcc::Abgr2101010);
@@ -799,7 +713,7 @@ fn scrgb_content_switches_the_pool_to_fp16_and_keeps_values_above_one() {
 	let mut reader = Reader::new();
 	let mut client = session.client();
 
-	client.declare(Declare::WpScRgb);
+	client.declare(Declare::SwapchainScRgb);
 	let values = [1.0f32, 2.5, 0.25, 1.0];
 	let pixel_bytes: Vec<u8> = values.iter().flat_map(|value| half(*value).to_le_bytes()).collect();
 	client.present(wl_shm::Format::Abgr16161616f, &pixel_bytes, 160, 120);
@@ -819,37 +733,6 @@ fn scrgb_content_switches_the_pool_to_fp16_and_keeps_values_above_one() {
 
 #[test]
 #[ignore = "requires GPU"]
-fn frog_declared_hdr10_switches_the_pool() {
-	let session = Session::start(true);
-	let mut client = session.client();
-	client.declare(Declare::FrogPq);
-	let word = abgr2101010(100, 200, 300, 3);
-	client.present(wl_shm::Format::Abgr2101010, &word.to_le_bytes(), 160, 120);
-	client.surface.commit();
-	let (colour, _frame) = session.frame_where(|dmabuf| dmabuf.dmabuf.format().code == Fourcc::Abgr2101010);
-	assert_eq!(colour.transfer, TransferFunction::Pq);
-	let light = colour.content_light.expect("content light level");
-	assert_eq!((light.max_cll, light.max_fall), (800, 200));
-}
-
-#[test]
-#[ignore = "requires GPU"]
-fn the_wsi_swapchain_metadata_wins_over_the_protocol_description() {
-	let session = Session::start(true);
-	let mut client = session.client();
-	// The protocol says CLL 900; the WSI layer's `set_hdr_metadata` says 700.
-	client.declare(Declare::WpPq);
-	client.declare(Declare::SwapchainPq);
-	let word = abgr2101010(100, 200, 300, 3);
-	client.present(wl_shm::Format::Abgr2101010, &word.to_le_bytes(), 160, 120);
-	let (colour, _frame) = session.frame_where(|dmabuf| dmabuf.dmabuf.format().code == Fourcc::Abgr2101010);
-	assert_eq!(colour.transfer, TransferFunction::Pq);
-	let light = colour.content_light.expect("content light level");
-	assert_eq!((light.max_cll, light.max_fall), (700, 250));
-}
-
-#[test]
-#[ignore = "requires GPU"]
 fn nothing_changes_when_hdr_is_not_enabled() {
 	let session = Session::start(false);
 	assert!(!session.ready.hdr);
@@ -858,8 +741,8 @@ fn nothing_changes_when_hdr_is_not_enabled() {
 		"DXVK_HDR is advertised with HDR off"
 	);
 	let mut client = session.client();
-	// Frog accepts the declaration even when HDR is off; the output stays SDR.
-	client.declare(Declare::FrogPq);
+	// The swapchain declares HDR10 although HDR is off; the output stays SDR.
+	client.declare(Declare::SwapchainPq);
 	let word = abgr2101010(100, 200, 300, 3);
 	client.present(wl_shm::Format::Abgr2101010, &word.to_le_bytes(), 160, 120);
 	let (colour, frame) = session.frame_where(|_| true);
@@ -880,7 +763,7 @@ fn an_hdr_game_dmabuf_is_passed_through_with_its_metadata() {
 	let session = Session::start(true);
 	let mut reader = Reader::new();
 	let mut client = session.client();
-	client.declare(Declare::WpPq);
+	client.declare(Declare::SwapchainPq);
 	let buffer = dmabuf_cleared_to(&mut reader.renderer, unorm10(512, 256, 768));
 	client.present_dmabuf(&buffer);
 
@@ -891,17 +774,36 @@ fn an_hdr_game_dmabuf_is_passed_through_with_its_metadata() {
 		frame.acquire_fence.is_none(),
 		"a passed-through frame has no composite to fence"
 	);
-	// GLES reads an alpha-less 10-bit framebuffer back as 8-bit only.
 	let centre = pixel(&reader.read(&frame), WIDTH as usize / 2, HEIGHT as usize / 2);
 	assert!(
-		close(centre, unorm10(512, 256, 768), 1.0 / 255.0),
+		close(centre, unorm10(512, 256, 768), 0.5 / 1023.0),
 		"centre pixel is {centre:?}"
 	);
 	assert_eq!(colour.transfer, TransferFunction::Pq);
 	assert_eq!(colour.primaries, ColourPrimaries::Bt2020);
 	assert_eq!(colour.mastering.expect("mastering metadata").max_luminance, 1000.0);
 	let light = colour.content_light.expect("content light level");
-	assert_eq!((light.max_cll, light.max_fall), (900, 300));
+	assert_eq!((light.max_cll, light.max_fall), (700, 250));
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn an_argb2101010_hdr_buffer_is_composited_with_its_channel_order() {
+	let session = Session::start(true);
+	let mut reader = Reader::new();
+	let mut client = session.client();
+	client.declare(Declare::SwapchainPq);
+	// The other HDR10 format the WSI layer offers (`A2R10G10B10_UNORM_PACK32`):
+	// not passed through, so it is composited into the `Abgr2101010` pool.
+	let word = argb2101010(512, 256, 768, 3);
+	client.present(wl_shm::Format::Argb2101010, &word.to_le_bytes(), 160, 120);
+
+	let (_colour, frame) = session.frame_where(|dmabuf| dmabuf.dmabuf.format().code == Fourcc::Abgr2101010);
+	let centre = pixel(&reader.read(&frame), WIDTH as usize / 2, HEIGHT as usize / 2);
+	assert!(
+		close(centre, unorm10(512, 256, 768), 0.5 / 1023.0),
+		"centre pixel is {centre:?}"
+	);
 }
 
 #[test]
@@ -911,7 +813,7 @@ fn sdr_cursor_over_hdr_content_is_drawn_at_the_sdr_white_level() {
 	let mut reader = Reader::new();
 	let mut client = session.client();
 
-	client.declare(Declare::WpScRgb);
+	client.declare(Declare::SwapchainScRgb);
 	let values = [1.0f32, 2.5, 0.25, 1.0];
 	let content: Vec<u8> = values.iter().flat_map(|value| half(*value).to_le_bytes()).collect();
 	client.present(wl_shm::Format::Abgr16161616f, &content, 160, 120);
