@@ -166,7 +166,12 @@ impl FerriscopeState {
 			self.passthrough_blocker = Some(blocker);
 			match blocker {
 				None => tracing::debug!(target: "ferriscope::passthrough", "passing the client buffer through"),
-				Some(blocker) => tracing::debug!(target: "ferriscope::passthrough", ?blocker, "compositing"),
+				Some(blocker) => tracing::debug!(
+					target: "ferriscope::passthrough",
+					?blocker,
+					format = ?candidate.as_ref().map(|candidate| candidate.dmabuf.format()),
+					"compositing"
+				),
 			}
 		}
 		match blocker {
