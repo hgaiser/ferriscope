@@ -66,8 +66,6 @@ macro_rules! protocol_bindings {
 	};
 }
 
-pub(crate) use protocol_bindings;
-
 protocol_bindings!(xwayland_protocol, "protocol/gamescope-xwayland.xml");
 protocol_bindings!(gamescope_protocol, "protocol/gamescope-swapchain.xml");
 protocol_bindings!(ferriscope_protocol, "protocol/ferriscope-swapchain-v1.xml");

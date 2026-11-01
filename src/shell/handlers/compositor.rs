@@ -91,10 +91,14 @@ impl DmabufHandler for FerriscopeState {
 	}
 
 	fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
-		if self.renderer.import_dmabuf(&dmabuf, None).is_ok() {
-			let _ = notifier.successful::<Self>();
-		} else {
-			notifier.failed();
+		match self.renderer.import_dmabuf(&dmabuf, None) {
+			Ok(_) => {
+				let _ = notifier.successful::<Self>();
+			},
+			Err(e) => {
+				tracing::warn!(format = ?smithay::backend::allocator::Buffer::format(&dmabuf), planes = dmabuf.num_planes(), error = ?e, "client dmabuf import failed");
+				notifier.failed();
+			},
 		}
 	}
 }

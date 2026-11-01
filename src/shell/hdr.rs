@@ -3,7 +3,6 @@
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 
 use crate::{
-	colour_management::surface_colour,
 	hdr::{ContentColour, ContentKind},
 	shell::{
 		FerriscopeState,
@@ -12,10 +11,10 @@ use crate::{
 	swapchain,
 };
 
-/// The colour a surface's client declared: the WSI swapchain's report combined
-/// with the colour management image description (see [`ContentColour::resolve`]).
+/// The colour a surface's client declared through the WSI swapchain (see
+/// [`ContentColour::resolve`]).
 pub(in crate::shell) fn surface_content_colour(surface: &WlSurface) -> ContentColour {
-	ContentColour::resolve(swapchain::swapchain_feedback(surface).as_ref(), surface_colour(surface))
+	ContentColour::resolve(swapchain::swapchain_feedback(surface).as_ref())
 }
 
 impl FerriscopeState {

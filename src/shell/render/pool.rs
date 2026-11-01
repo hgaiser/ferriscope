@@ -6,17 +6,14 @@ use std::{
 };
 
 #[cfg(feature = "test-support")]
-use smithay::backend::{
-	allocator::Fourcc,
-	renderer::{Offscreen, gles::GlesRenderbuffer},
-};
+use smithay::backend::{allocator::Fourcc, renderer::Offscreen, vulkan::image::VulkanImage};
 use smithay::{
 	backend::{
 		allocator::{
 			Allocator,
 			dmabuf::{AsDmabuf, Dmabuf},
 		},
-		renderer::{Renderer, gles::GlesRenderer, sync::SyncPoint, utils::Buffer},
+		renderer::{Renderer, sync::SyncPoint, utils::Buffer, vulkan::VulkanRenderer},
 	},
 	reexports::calloop::{Interest, Mode, PostAction, RegistrationToken, generic::Generic},
 };
@@ -220,9 +217,8 @@ impl FerriscopeState {
 	#[cfg(feature = "test-support")]
 	pub(in crate::shell) fn ensure_renderbuffer(&mut self) -> Result<()> {
 		if self.frame_target.is_none() {
-			let target: GlesRenderbuffer =
-				Offscreen::create_buffer(&mut self.renderer, Fourcc::Argb8888, self.frame_size)
-					.map_err(|e| Error::Gpu(format!("allocate offscreen target: {e:?}")))?;
+			let target: VulkanImage = Offscreen::create_buffer(&mut self.renderer, Fourcc::Abgr8888, self.frame_size)
+				.map_err(|e| Error::Gpu(format!("allocate offscreen target: {e:?}")))?;
 			self.frame_target = Some(target);
 		}
 		Ok(())
@@ -283,11 +279,14 @@ pub(in crate::shell) fn classify_release(handle: u64, delivered: &[Option<u64>])
 /// Export `sync` as an acquire fence for the consumer.
 ///
 /// `SyncPoint::export` returns `None` both when the work is already complete
-/// and when the renderer's EGL fence is not exportable (no native fence). In
+/// and when the renderer cannot export a sync_file. In
 /// the latter case the GPU work may still be in flight, so wait for it before
 /// reporting `None`. This keeps `acquire_fence == None` meaning exactly "the
 /// buffer is already complete".
-pub(in crate::shell) fn export_acquire_fence(renderer: &mut GlesRenderer, sync: &SyncPoint) -> Result<Option<OwnedFd>> {
+pub(in crate::shell) fn export_acquire_fence(
+	renderer: &mut VulkanRenderer,
+	sync: &SyncPoint,
+) -> Result<Option<OwnedFd>> {
 	if let Some(fence) = sync.export() {
 		return Ok(Some(fence));
 	}

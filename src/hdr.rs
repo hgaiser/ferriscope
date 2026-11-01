@@ -1,13 +1,15 @@
 //! What a window's content is, colour-wise, and how that is reported.
 //!
-//! Two sources describe the colour of a surface and they are combined with
-//! gamescope's precedence: the WSI swapchain's `VkColorSpaceKHR` and
-//! `vkSetHdrMetadataEXT` data (`swapchain`) are authoritative when the layer
-//! declares an HDR colour space; the `wp_color_management_v1` /
-//! `frog_color_management_v1` image description (`colour_management`) is used
-//! otherwise. gamescope maps a colour space to a texture colour space in
-//! `VkColorSpaceToGamescopeAppTextureColorSpace` (`rendervulkan.hpp:109`) and
-//! treats scRGB and HDR10 PQ as HDR (`ColorspaceIsHDR`, `gamescope_shared.h:35`).
+//! As in gamescope, the WSI swapchain is the only source: its
+//! `VkColorSpaceKHR` and `vkSetHdrMetadataEXT` data (`swapchain`). ferriscope,
+//! like gamescope, serves no colour management protocol: with
+//! `wp_color_management_v1` Mesa's Wayland WSI would offer HDR surface formats
+//! of its own, ahead of the layer's, and games that write `A2B10G10R10` data
+//! into whichever 10-bit format they pick (Indiana Jones and the Great Circle)
+//! would get red and blue swapped. gamescope maps a colour space to a texture
+//! colour space in `VkColorSpaceToGamescopeAppTextureColorSpace`
+//! (`rendervulkan.hpp:109`) and treats scRGB and HDR10 PQ as HDR
+//! (`ColorspaceIsHDR`, `gamescope_shared.h:35`).
 
 use crate::{
 	colour_meta::{
@@ -67,8 +69,7 @@ impl ContentKind {
 	}
 }
 
-/// HDR static metadata where each part may be missing, as the colour
-/// management protocols let a client set the parts separately.
+/// HDR static metadata where each part may be missing.
 ///
 /// Units follow CTA-861.G like [`HdrMetadata`]: chromaticities in 0.00002,
 /// luminances in cd/m2 except the minimum, in 0.0001 cd/m2.
@@ -102,11 +103,6 @@ impl From<HdrMetadata> for ContentMetadata {
 }
 
 impl ContentMetadata {
-	/// Whether nothing is set.
-	pub fn is_empty(&self) -> bool {
-		*self == Self::default()
-	}
-
 	/// The mastering display, when the metadata names a luminance range.
 	/// Missing primaries and white point default to BT.2020 / D65, the HDR10
 	/// mastering display.
@@ -147,30 +143,17 @@ pub struct ContentColour {
 }
 
 impl ContentColour {
-	/// Combine the WSI swapchain's report with the image description a client
-	/// set through a colour management protocol.
-	///
-	/// A swapchain that declares scRGB or HDR10 decides the encoding; its
-	/// metadata wins over the description's. A swapchain that is sRGB leaves
-	/// the decision to the description.
-	pub fn resolve(swapchain: Option<&SwapchainFeedback>, described: Option<ContentColour>) -> Self {
-		let swapchain_kind = swapchain.map(|feedback| ContentKind::from_vk_colorspace(feedback.vk_colorspace));
-		let kind = match swapchain_kind {
-			Some(kind) if kind.is_hdr() => kind,
-			_ => described.map_or(ContentKind::Sdr, |described| described.kind),
+	/// The colour the WSI swapchain reports: scRGB or HDR10 with its metadata,
+	/// SDR for any other colour space or without a swapchain.
+	pub fn resolve(swapchain: Option<&SwapchainFeedback>) -> Self {
+		let Some(feedback) = swapchain else {
+			return Self::default();
 		};
+		let kind = ContentKind::from_vk_colorspace(feedback.vk_colorspace);
 		if !kind.is_hdr() {
 			return Self::default();
 		}
-		let metadata = swapchain
-			.and_then(|feedback| feedback.hdr_metadata)
-			.map(ContentMetadata::from)
-			.or_else(|| {
-				described
-					.map(|described| described.metadata)
-					.filter(|metadata| !metadata.is_empty())
-			})
-			.unwrap_or_default();
+		let metadata = feedback.hdr_metadata.map(ContentMetadata::from).unwrap_or_default();
 		Self { kind, metadata }
 	}
 
@@ -222,16 +205,6 @@ mod tests {
 		}
 	}
 
-	fn described(kind: ContentKind) -> ContentColour {
-		ContentColour {
-			kind,
-			metadata: ContentMetadata {
-				max_cll: Some(4000),
-				..ContentMetadata::default()
-			},
-		}
-	}
-
 	#[test]
 	fn vulkan_colour_spaces_map_like_gamescope() {
 		assert_eq!(
@@ -261,34 +234,24 @@ mod tests {
 
 	#[test]
 	fn nothing_declared_is_sdr() {
-		assert_eq!(ContentColour::resolve(None, None), ContentColour::default());
+		assert_eq!(ContentColour::resolve(None), ContentColour::default());
 		let sdr = feedback(VK_COLOR_SPACE_SRGB_NONLINEAR, Some(swapchain_metadata()));
-		assert_eq!(ContentColour::resolve(Some(&sdr), None).kind, ContentKind::Sdr);
+		assert_eq!(ContentColour::resolve(Some(&sdr)).kind, ContentKind::Sdr);
 		// Metadata alone never makes content HDR.
-		assert!(ContentColour::resolve(Some(&sdr), None).metadata.is_empty());
+		assert!(ContentColour::resolve(Some(&sdr)).metadata == ContentMetadata::default());
 	}
 
 	#[test]
-	fn an_hdr_swapchain_beats_the_description() {
+	fn an_hdr_swapchain_decides_the_encoding_and_metadata() {
 		let pq = feedback(VK_COLOR_SPACE_HDR10_ST2084, Some(swapchain_metadata()));
-		let resolved = ContentColour::resolve(Some(&pq), Some(described(ContentKind::ScRgb)));
+		let resolved = ContentColour::resolve(Some(&pq));
 		assert_eq!(resolved.kind, ContentKind::Pq);
 		assert_eq!(resolved.metadata.max_cll, Some(900));
-	}
 
-	#[test]
-	fn the_description_decides_when_the_swapchain_is_sdr() {
-		let sdr = feedback(VK_COLOR_SPACE_SRGB_NONLINEAR, None);
-		let resolved = ContentColour::resolve(Some(&sdr), Some(described(ContentKind::Pq)));
-		assert_eq!(resolved.kind, ContentKind::Pq);
-		assert_eq!(resolved.metadata.max_cll, Some(4000));
-	}
-
-	#[test]
-	fn the_description_supplies_metadata_the_swapchain_lacks() {
-		let pq = feedback(VK_COLOR_SPACE_HDR10_ST2084, None);
-		let resolved = ContentColour::resolve(Some(&pq), Some(described(ContentKind::Pq)));
-		assert_eq!(resolved.metadata.max_cll, Some(4000));
+		let scrgb = feedback(VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR, None);
+		let resolved = ContentColour::resolve(Some(&scrgb));
+		assert_eq!(resolved.kind, ContentKind::ScRgb);
+		assert!(resolved.metadata == ContentMetadata::default());
 	}
 
 	#[test]

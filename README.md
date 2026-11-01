@@ -31,8 +31,9 @@ There is no display, no modeset and no scanout, and no vblank. The session rate
   (Steam-controlled focus).
 - **Output fill.** Clients keep their resolution and are scaled, aspect preserved
   and centred, to fill the output.
-- **HDR.** With `CompositorConfig::hdr`, `wp_color_management_v1` and
-  `frog_color_management_v1` are advertised. The pool follows the focused content:
+- **HDR.** With `CompositorConfig::hdr`, the WSI layer offers HDR surface formats
+  and reports the colour space and metadata, as in gamescope. No colour
+  management protocol is served. The pool follows the focused content:
   10-bit PQ (`Abgr2101010`) or FP16 scRGB (`Abgr16161616f`). SDR cursor and
   overlays are converted in a GLES shader.
 - **WSI.** `ferriscope_swapchain_v1` (native) and gamescope's

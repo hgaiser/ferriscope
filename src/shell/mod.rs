@@ -19,15 +19,14 @@ use std::{
 };
 
 #[cfg(feature = "test-support")]
-use smithay::backend::renderer::gles::GlesRenderbuffer;
+use smithay::backend::vulkan::image::VulkanImage;
 use smithay::{
 	backend::{
 		allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
-		drm::DrmDeviceFd,
-		egl::{EGLContext, EGLDisplay},
+		drm::{DrmDeviceFd, sync::supports_syncobj_eventfd},
 		renderer::{
 			ImportDma, ImportMemWl,
-			gles::{GlesRenderer, GlesTexProgram},
+			vulkan::{VulkanRenderer, VulkanTexProgram},
 		},
 	},
 	desktop::{PopupManager, Space, Window},
@@ -47,7 +46,7 @@ use smithay::{
 	wayland::{
 		compositor::{CompositorClientState, CompositorState},
 		dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufState},
-		drm_syncobj::{DrmSyncobjState, supports_syncobj_eventfd},
+		drm_syncobj::DrmSyncobjState,
 		output::OutputManagerState,
 		pointer_constraints::PointerConstraintsState,
 		relative_pointer::RelativePointerManagerState,
@@ -63,7 +62,6 @@ use smithay::{
 
 use crate::{
 	action_binding::ActionBindings,
-	colour_management::ColourManagementGlobals,
 	compositor::Ready,
 	config::{CompositorConfig, OutputPlan},
 	cursor::Cursor,
@@ -221,7 +219,7 @@ pub struct FerriscopeState {
 	/// lock is released.
 	cursor_position_hint: Option<(WlSurface, Point<f64, Logical>)>,
 
-	renderer: GlesRenderer,
+	renderer: VulkanRenderer,
 	allocator: GbmAllocator<Arc<std::fs::File>>,
 	/// The pool's current format: the SDR one, or an HDR one while the base
 	/// layer is HDR (see [`Self::select_output_encoding`]).
@@ -238,7 +236,7 @@ pub struct FerriscopeState {
 	/// (`flSDROnHDRBrightness`).
 	sdr_white_nits: f32,
 	/// The SDR-to-HDR conversion shader; compiled when HDR output is on.
-	sdr_program: Option<GlesTexProgram>,
+	sdr_program: Option<VulkanTexProgram>,
 	/// Whether the missing-HDR-format warning was logged.
 	hdr_format_warned: bool,
 	use_dmabuf: bool,
@@ -253,7 +251,7 @@ pub struct FerriscopeState {
 	pool: DmabufPool,
 	/// The offscreen readback target of the non-DMA-BUF render path.
 	#[cfg(feature = "test-support")]
-	frame_target: Option<GlesRenderbuffer>,
+	frame_target: Option<VulkanImage>,
 	/// The damage tracker and the buffer age of each render target.
 	damage: FrameDamage,
 	/// Per-frame buffers kept across frames to avoid reallocating them.
@@ -299,8 +297,6 @@ pub struct FerriscopeState {
 	/// `GAMESCOPE_XWAYLAND_SERVER_ID` and `FERRISCOPE_XWAYLAND_SERVER_ID` and
 	/// named by `override_window_content`. `None` before Xwayland is up.
 	xwayland_server_id: Option<u32>,
-	/// `wp_color_manager_v1` and `frog_color_management_factory_v1`.
-	_colour_globals: ColourManagementGlobals,
 	/// Typing state shared by the input methods (see [`ime`]).
 	ime: ImeTyper,
 	/// Touch routing state (see [`touch`]).
@@ -413,11 +409,11 @@ impl FerriscopeState {
 		let syncobj_fd = file
 			.try_clone()
 			.map_err(|e| Error::Gpu(format!("dup {}: {e}", config.render_node.display())))?;
+		let renderer_file = file
+			.try_clone()
+			.map_err(|e| Error::Gpu(format!("dup {}: {e}", config.render_node.display())))?;
 		let gbm = GbmDevice::new(Arc::new(file)).map_err(|e| Error::Gpu(format!("gbm device: {e:?}")))?;
-		let display_egl =
-			unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|e| Error::Gpu(format!("egl display: {e:?}")))?;
-		let context = EGLContext::new(&display_egl).map_err(|e| Error::Gpu(format!("egl context: {e:?}")))?;
-		let mut renderer = unsafe { GlesRenderer::new(context) }.map_err(|e| Error::Gpu(format!("gles: {e:?}")))?;
+		let mut renderer = render::gpu::create_renderer(&config.render_node, renderer_file)?;
 		let allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
 		let render_format = pick_render_format(&renderer)?;
 		let sdr_program = if config.hdr {
@@ -550,7 +546,6 @@ impl FerriscopeState {
 		let cursor_hide_time = config.seat.cursor_hide_time;
 		let touch_click_mode = config.seat.touch_click_mode;
 		let config_hdr = config.hdr;
-		let colour_globals = ColourManagementGlobals::new(&display_handle, config_hdr);
 
 		let mut state = Self {
 			config,
@@ -638,7 +633,6 @@ impl FerriscopeState {
 			_swapchain_globals: swapchain_globals,
 			swapchain_factories: FactoryRegistry::default(),
 			xwayland_server_id: None,
-			_colour_globals: colour_globals,
 			ime: ImeTyper::default(),
 			touch: TouchState::new(touch_click_mode),
 			pen: PenState::default(),
@@ -795,12 +789,6 @@ impl FerriscopeState {
 		self.child = Some(child);
 		self.watch_child();
 		Ok(())
-	}
-
-	/// Run `f` once the current dispatch is over, for work that cannot happen
-	/// inside a request handler (a destructor event on a just-created object).
-	pub(crate) fn defer(&self, f: impl FnOnce() + 'static) {
-		self.loop_handle.insert_idle(move |_| f());
 	}
 
 	/// Ask the event loop to exit; also used by [`crate::compositor::Compositor::stop`].

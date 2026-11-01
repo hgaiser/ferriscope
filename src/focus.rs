@@ -536,8 +536,10 @@ fn pick_primary_focus_and_override(
 		}
 	}
 
-	// :4304
-	if focus.is_none() && (!global || !controlled_focus) {
+	// :4304. Deviates from gamescope: the Steam updater (bootstrapper) runs
+	// before Steam writes any focus control, so fall back to it too, or it is never shown.
+	let no_steam_control = control.window.is_none() && control.app_ids.is_empty();
+	if focus.is_none() && (!global || !controlled_focus || no_steam_control) {
 		focus = possible.first().copied();
 	}
 
@@ -1603,6 +1605,26 @@ mod tests {
 		let picked = run(&[fresh]);
 		assert_eq!(picked.ctx.focus, Some(2));
 		assert_eq!(picked.global.focus, None);
+	}
+
+	#[test]
+	fn steam_controlled_focus_falls_back_before_steam_writes_focus_control() {
+		// The Steam updater: a Steam window (`STEAM_BIGPICTURE`), override
+		// redirect, mapped before Steam writes any `GAMESCOPECTRL_*` property.
+		let updater = {
+			let mut meta = win(1);
+			meta.is_steam_legacy_big_picture = true;
+			meta.app_id = STEAM_BIG_PICTURE_APP_ID;
+			meta.override_redirect = true;
+			meta
+		};
+		let picked = run_with(
+			&[updater],
+			&FocusControl::default(),
+			FocusStrategy::SteamControlled,
+			PreviousFocus::default(),
+		);
+		assert_eq!(picked.global.focus, Some(1));
 	}
 
 	#[test]

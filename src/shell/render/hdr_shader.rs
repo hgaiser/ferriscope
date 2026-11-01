@@ -8,13 +8,14 @@
 //! gamescope draws SDR content in an HDR output as gamma 2.2 with the SDR
 //! white luminance (`tonemapping.g22_luminance = flSDROnHDRBrightness`,
 //! `steamcompmgr.cpp:375`), converts BT.709 to BT.2020 for PQ, and scales
-//! scRGB so 1.0 is 80 nits. The same maths run here in a GLES texture shader.
+//! scRGB so 1.0 is 80 nits. The same maths run here in a custom texture
+//! program of smithay's Vulkan renderer (`shader/sdr_on_hdr.comp`).
 
 use smithay::{
 	backend::renderer::{
 		element::{Element, Id, Kind, RenderElement, UnderlyingStorage},
-		gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType},
 		utils::{CommitCounter, DamageSet, OpaqueRegions},
+		vulkan::{Error as VulkanError, VulkanFrame, VulkanRenderer, VulkanTexProgram},
 	},
 	utils::{Buffer, Physical, Point, Rectangle, Scale, Transform, user_data::UserDataMap},
 };
@@ -24,116 +25,74 @@ use crate::{
 	hdr::ContentKind,
 };
 
-const SHADER: &str = r#"#version 100
+/// The conversion shader, compiled by `shader/compile.sh`.
+const SPIRV: &[u8] = include_bytes!("../../../shader/sdr_on_hdr.spv");
 
-//_DEFINES_
-
-#if defined(EXTERNAL)
-#extension GL_OES_EGL_image_external : require
-#endif
-
-precision highp float;
-#if defined(EXTERNAL)
-uniform samplerExternalOES tex;
-#else
-uniform sampler2D tex;
-#endif
-
-uniform float alpha;
-varying vec2 v_coords;
-
-#if defined(DEBUG_FLAGS)
-uniform float tint;
-#endif
-
-// SDR white in nits, and 1.0 for a PQ output, 0.0 for scRGB.
-uniform float sdr_white_nits;
-uniform float pq_output;
-
-vec3 bt709_to_bt2020(vec3 c) {
-    return vec3(
-        dot(vec3(0.6274039, 0.3292830, 0.0433131), c),
-        dot(vec3(0.0690973, 0.9195404, 0.0113623), c),
-        dot(vec3(0.0163914, 0.0880133, 0.8955953), c));
+/// The shader's custom uniforms, after the renderer's own push constants.
+///
+/// Matches the `sdrWhiteNits` and `pqOutput` members of the shader's push
+/// constant block.
+#[derive(Debug, Clone, Copy)]
+struct Uniforms {
+	/// SDR white in nits.
+	sdr_white_nits: f32,
+	/// 1.0 for a PQ output, 0.0 for scRGB.
+	pq_output: f32,
 }
 
-// SMPTE ST 2084 inverse EOTF of absolute luminance in nits.
-vec3 pq_encode(vec3 nits) {
-    const float m1 = 0.1593017578125;
-    const float m2 = 78.84375;
-    const float c1 = 0.8359375;
-    const float c2 = 18.8515625;
-    const float c3 = 18.6875;
-    vec3 y = clamp(nits / 10000.0, 0.0, 1.0);
-    vec3 ym = vec3(pow(y.r, m1), pow(y.g, m1), pow(y.b, m1));
-    vec3 ratio = (c1 + c2 * ym) / (1.0 + c3 * ym);
-    return vec3(pow(ratio.r, m2), pow(ratio.g, m2), pow(ratio.b, m2));
+impl Uniforms {
+	const SIZE: usize = 8;
+
+	fn to_bytes(self) -> Vec<u8> {
+		[self.sdr_white_nits, self.pq_output]
+			.iter()
+			.flat_map(|value| value.to_ne_bytes())
+			.collect()
+	}
 }
-
-void main() {
-    vec4 color = texture2D(tex, v_coords);
-#if defined(NO_ALPHA)
-    color.a = 1.0;
-#endif
-
-    // Buffers are premultiplied; convert the colour, not the coverage.
-    vec3 srgb = color.a > 0.0 ? clamp(color.rgb / color.a, 0.0, 1.0) : vec3(0.0);
-    vec3 linear = vec3(pow(srgb.r, 2.2), pow(srgb.g, 2.2), pow(srgb.b, 2.2));
-
-    vec3 encoded;
-    if (pq_output > 0.5) {
-        encoded = pq_encode(bt709_to_bt2020(linear) * sdr_white_nits);
-    } else {
-        encoded = linear * (sdr_white_nits / 80.0);
-    }
-
-    color = vec4(encoded * color.a, color.a) * alpha;
-
-#if defined(DEBUG_FLAGS)
-    if (tint == 1.0)
-        color = vec4(0.0, 0.2, 0.0, 0.2) + color * 0.8;
-#endif
-
-    gl_FragColor = color;
-}
-"#;
 
 /// Compile the conversion shader.
-pub(in crate::shell) fn compile(renderer: &mut GlesRenderer) -> Result<GlesTexProgram> {
+pub(in crate::shell) fn compile(renderer: &mut VulkanRenderer) -> Result<VulkanTexProgram> {
+	let words: Vec<u32> = SPIRV
+		.as_chunks::<4>()
+		.0
+		.iter()
+		.map(|word| u32::from_le_bytes(*word))
+		.collect();
 	renderer
-		.compile_custom_texture_shader(
-			SHADER,
-			&[
-				UniformName::new("sdr_white_nits", UniformType::_1f),
-				UniformName::new("pq_output", UniformType::_1f),
-			],
-		)
+		.compile_custom_texture_shader(&words, Uniforms::SIZE)
 		.map_err(|e| Error::Gpu(format!("compile the SDR-on-HDR shader: {e:?}")))
 }
 
 /// The conversion to apply to SDR elements: a compiled shader and its uniforms.
 #[derive(Debug, Clone)]
 pub(in crate::shell) struct Conversion {
-	program: GlesTexProgram,
-	uniforms: Vec<Uniform<'static>>,
+	program: VulkanTexProgram,
+	uniforms: Vec<u8>,
 }
 
 impl Conversion {
 	/// The conversion into an `output` encoding with SDR white at `sdr_white_nits`;
 	/// `None` for an SDR output, which needs none.
-	pub(in crate::shell) fn new(program: &GlesTexProgram, output: ContentKind, sdr_white_nits: f32) -> Option<Self> {
-		let pq = match output {
+	pub(in crate::shell) fn new(program: &VulkanTexProgram, output: ContentKind, sdr_white_nits: f32) -> Option<Self> {
+		let pq_output = match output {
 			ContentKind::Sdr => return None,
 			ContentKind::Pq => 1.0f32,
 			ContentKind::ScRgb => 0.0,
 		};
 		Some(Self {
 			program: program.clone(),
-			uniforms: vec![
-				Uniform::new("sdr_white_nits", sdr_white_nits),
-				Uniform::new("pq_output", pq),
-			],
+			uniforms: Uniforms {
+				sdr_white_nits,
+				pq_output,
+			}
+			.to_bytes(),
 		})
+	}
+
+	/// Draw the following textures of `frame` through this conversion.
+	fn apply(&self, frame: &mut VulkanFrame<'_, '_>) -> std::result::Result<(), VulkanError> {
+		frame.override_default_tex_program(self.program.clone(), self.uniforms.clone())
 	}
 }
 
@@ -192,26 +151,26 @@ impl<E: Element> Element for SdrOnHdr<E> {
 	}
 }
 
-impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for SdrOnHdr<E> {
+impl<E: RenderElement<VulkanRenderer>> RenderElement<VulkanRenderer> for SdrOnHdr<E> {
 	fn draw(
 		&self,
-		frame: &mut GlesFrame<'_, '_>,
+		frame: &mut VulkanFrame<'_, '_>,
 		src: Rectangle<f64, Buffer>,
 		dst: Rectangle<i32, Physical>,
 		damage: &[Rectangle<i32, Physical>],
 		opaque_regions: &[Rectangle<i32, Physical>],
 		cache: Option<&UserDataMap>,
-	) -> std::result::Result<(), GlesError> {
+	) -> std::result::Result<(), VulkanError> {
 		let Some(conversion) = &self.conversion else {
 			return self.inner.draw(frame, src, dst, damage, opaque_regions, cache);
 		};
-		frame.override_default_tex_program(conversion.program.clone(), conversion.uniforms.clone());
+		conversion.apply(frame)?;
 		let result = self.inner.draw(frame, src, dst, damage, opaque_regions, cache);
 		frame.clear_tex_program_override();
 		result
 	}
 
-	fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+	fn underlying_storage(&self, renderer: &mut VulkanRenderer) -> Option<UnderlyingStorage<'_>> {
 		self.inner.underlying_storage(renderer)
 	}
 }
@@ -271,20 +230,14 @@ pub(in crate::shell) mod reference {
 
 #[cfg(test)]
 mod gpu_tests {
-	use std::sync::Arc;
-
 	use smithay::{
 		backend::{
 			allocator::{
 				Allocator, Fourcc,
 				dmabuf::{AsDmabuf, Dmabuf},
-				gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
+				gbm::GbmAllocator,
 			},
-			egl::{EGLContext, EGLDisplay},
-			renderer::{
-				Bind, Frame, ImportDma, ImportMem, Renderer,
-				gles::{GlesRenderer, ffi},
-			},
+			renderer::{Bind, ExportMem, Frame, ImportMem, Renderer},
 		},
 		utils::{Size, Transform},
 	};
@@ -294,20 +247,7 @@ mod gpu_tests {
 
 	const SIZE: i32 = 8;
 
-	fn renderer() -> (GlesRenderer, GbmAllocator<Arc<std::fs::File>>) {
-		let file = std::fs::OpenOptions::new()
-			.read(true)
-			.write(true)
-			.open("/dev/dri/renderD128")
-			.expect("open the render node");
-		let gbm = GbmDevice::new(Arc::new(file)).expect("gbm device");
-		let display = unsafe { EGLDisplay::new(gbm.clone()) }.expect("egl display");
-		let context = EGLContext::new(&display).expect("egl context");
-		let renderer = unsafe { GlesRenderer::new(context) }.expect("gles");
-		(renderer, GbmAllocator::new(gbm, GbmBufferFlags::RENDERING))
-	}
-
-	fn target(allocator: &mut GbmAllocator<Arc<std::fs::File>>, format: &RenderFormat) -> Dmabuf {
+	fn target(allocator: &mut GbmAllocator<std::sync::Arc<std::fs::File>>, format: &RenderFormat) -> Dmabuf {
 		allocator
 			.create_buffer(SIZE as u32, SIZE as u32, format.code, &format.modifiers)
 			.expect("allocate the target")
@@ -315,10 +255,22 @@ mod gpu_tests {
 			.expect("export the target")
 	}
 
+	/// An IEEE 754 half-precision float.
+	fn f16_to_f32(bits: u16) -> f32 {
+		let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+		let exponent = i32::from((bits >> 10) & 0x1f);
+		let mantissa = f32::from(bits & 0x3ff);
+		sign * match exponent {
+			0 => mantissa * 2f32.powi(-24),
+			31 => f32::INFINITY,
+			_ => (1.0 + mantissa / 1024.0) * 2f32.powi(exponent - 15),
+		}
+	}
+
 	/// Draw an opaque 8x8 texture of `srgb` (RGBA bytes, premultiplied) through
 	/// the conversion into an `output` target and read the RGBA floats back.
 	fn convert(output: ContentKind, sdr_white_nits: f32, srgb: [u8; 4]) -> [f32; 4] {
-		let (mut renderer, mut allocator) = renderer();
+		let (mut renderer, mut allocator) = crate::shell::render::gpu::test_renderer();
 		let program = compile(&mut renderer).expect("compile");
 		let conversion = Conversion::new(&program, output, sdr_white_nits).expect("an HDR output");
 		let texture = renderer
@@ -333,11 +285,11 @@ mod gpu_tests {
 		let format =
 			crate::shell::render::elements::pick_hdr_format(&renderer, output).expect("a renderable HDR format");
 		let mut dmabuf = target(&mut allocator, &format);
+		let mut bound = renderer.bind(&mut dmabuf).expect("bind the target");
 		{
-			let mut bound = renderer.bind(&mut dmabuf).expect("bind the target");
 			let size = Size::<i32, smithay::utils::Physical>::from((SIZE, SIZE));
 			let mut frame = renderer.render(&mut bound, size, Transform::Normal).expect("frame");
-			frame.override_default_tex_program(conversion.program.clone(), conversion.uniforms.clone());
+			conversion.apply(&mut frame).expect("override the program");
 			let full = smithay::utils::Rectangle::from_size(size);
 			frame
 				.render_texture_from_to(
@@ -348,54 +300,30 @@ mod gpu_tests {
 					&[],
 					Transform::Normal,
 					1.0,
-					None,
-					&[],
 				)
 				.expect("draw");
 			frame.finish().expect("finish").wait().expect("wait");
 		}
 
-		let readback = renderer.import_dmabuf(&dmabuf, None).expect("import the target");
-		let id = readback.tex_id();
-		let mut out = [0f32; 4];
-		renderer
-			.with_context(|gl| unsafe {
-				let mut fbo = 0;
-				gl.GenFramebuffers(1, &mut fbo);
-				gl.BindFramebuffer(ffi::FRAMEBUFFER, fbo);
-				gl.FramebufferTexture2D(ffi::FRAMEBUFFER, ffi::COLOR_ATTACHMENT0, ffi::TEXTURE_2D, id, 0);
-				match format.code {
-					Fourcc::Abgr2101010 => {
-						let mut words = vec![0u32; (SIZE * SIZE) as usize];
-						gl.ReadPixels(
-							0,
-							0,
-							SIZE,
-							SIZE,
-							ffi::RGBA,
-							ffi::UNSIGNED_INT_2_10_10_10_REV,
-							words.as_mut_ptr().cast(),
-						);
-						let word = words[0];
-						out = [
-							(word & 0x3ff) as f32 / 1023.0,
-							((word >> 10) & 0x3ff) as f32 / 1023.0,
-							((word >> 20) & 0x3ff) as f32 / 1023.0,
-							(word >> 30) as f32 / 3.0,
-						];
-					},
-					_ => {
-						let mut floats = vec![0f32; (SIZE * SIZE * 4) as usize];
-						gl.ReadPixels(0, 0, SIZE, SIZE, ffi::RGBA, ffi::FLOAT, floats.as_mut_ptr().cast());
-						out.copy_from_slice(&floats[..4]);
-					},
-				}
-				assert_eq!(gl.GetError(), ffi::NO_ERROR);
-				gl.BindFramebuffer(ffi::FRAMEBUFFER, 0);
-				gl.DeleteFramebuffers(1, &fbo);
-			})
-			.expect("gl context");
-		out
+		let region = smithay::utils::Rectangle::from_size((SIZE, SIZE).into());
+		let mapping = renderer
+			.copy_framebuffer(&bound, region, format.code)
+			.expect("read the target back");
+		let bytes = renderer.map_texture(&mapping).expect("map the readback");
+		match format.code {
+			Fourcc::Abgr2101010 | Fourcc::Xbgr2101010 => {
+				let word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+				[
+					(word & 0x3ff) as f32 / 1023.0,
+					((word >> 10) & 0x3ff) as f32 / 1023.0,
+					((word >> 20) & 0x3ff) as f32 / 1023.0,
+					(word >> 30) as f32 / 3.0,
+				]
+			},
+			_ => std::array::from_fn(|channel| {
+				f16_to_f32(u16::from_le_bytes([bytes[channel * 2], bytes[channel * 2 + 1]]))
+			}),
+		}
 	}
 
 	fn srgb8(pixel: [u8; 4]) -> [f64; 3] {

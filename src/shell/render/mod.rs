@@ -2,6 +2,7 @@
 
 pub(in crate::shell) mod damage;
 pub(in crate::shell) mod elements;
+pub(in crate::shell) mod gpu;
 pub(in crate::shell) mod hdr_shader;
 pub(in crate::shell) mod passthrough;
 pub(in crate::shell) mod pool;
@@ -16,7 +17,7 @@ use smithay::{
 			surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
 			utils::{Relocate, RelocateRenderElement, RescaleRenderElement},
 		},
-		gles::GlesRenderer,
+		vulkan::VulkanRenderer,
 	},
 	desktop::{space::SpaceRenderElements, utils::send_frames_surface_tree},
 	reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface},
@@ -52,7 +53,7 @@ use smithay::{
 };
 
 /// The space's render elements.
-type SpaceElements = Vec<SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>>;
+type SpaceElements = Vec<SpaceRenderElements<VulkanRenderer, WaylandSurfaceRenderElement<VulkanRenderer>>>;
 
 impl FerriscopeState {
 	/// A cheap signature of the composited scene, used to skip re-compositing
@@ -209,8 +210,8 @@ impl FerriscopeState {
 		self.cursor.visible = false;
 		if let Some((surface, location)) = self.cursor_render_target() {
 			let cursor_elements = render_elements_from_surface_tree::<
-				GlesRenderer,
-				WaylandSurfaceRenderElement<GlesRenderer>,
+				VulkanRenderer,
+				WaylandSurfaceRenderElement<VulkanRenderer>,
 			>(&mut self.renderer, &surface, location, 1.0, 1.0, Kind::Cursor);
 			self.cursor.visible = !cursor_elements.is_empty();
 			elements.extend(
@@ -254,8 +255,8 @@ impl FerriscopeState {
 				let alpha = opacity as f32 / OPAQUE as f32;
 				let location = Point::<i32, Physical>::from((overlay.location.x, overlay.location.y));
 				let surface_elements = render_elements_from_surface_tree::<
-					GlesRenderer,
-					Wrap<WaylandSurfaceRenderElement<GlesRenderer>>,
+					VulkanRenderer,
+					Wrap<WaylandSurfaceRenderElement<VulkanRenderer>>,
 				>(&mut self.renderer, &surface, location, 1.0, alpha, Kind::Unspecified);
 
 				// gamescope paints an overlay with its own committed texture
@@ -449,12 +450,9 @@ impl FerriscopeState {
 					.copy_framebuffer(&target, region, Fourcc::Abgr8888)
 					.map_err(|e| Error::Render(format!("readback: {e:?}")))?
 			};
-			// `copy_framebuffer` reads the framebuffer bottom-up in GL window
-			// coordinates, but the render projection maps output row 0 to the GL
-			// bottom row, so the mapping is already top-down in output
-			// coordinates. `TextureMapping::flipped()` must not be used as a
-			// signal: the GLES mapping returned by `copy_framebuffer` reports a
-			// constant `true` regardless of the actual orientation.
+			// `copy_framebuffer` copies the target image as it is in memory, and
+			// the renderer draws output row 0 to image row 0, so the mapping is
+			// top-down in output coordinates.
 			let pixels = {
 				let slice = self
 					.renderer
@@ -540,7 +538,7 @@ impl FerriscopeState {
 				(location - window.geometry().loc - output_geo.loc).to_physical_precise_round(Scale::from(1.0));
 			if let Some(surface) = self.content_overrides.presented(window) {
 				elements.extend(
-					render_elements_from_surface_tree::<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>(
+					render_elements_from_surface_tree::<VulkanRenderer, WaylandSurfaceRenderElement<VulkanRenderer>>(
 						&mut self.renderer,
 						&surface,
 						render_location,
@@ -558,7 +556,7 @@ impl FerriscopeState {
 			{
 				elements.extend(
 					window
-						.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
+						.render_elements::<WaylandSurfaceRenderElement<VulkanRenderer>>(
 							&mut self.renderer,
 							render_location,
 							Scale::from(1.0),
