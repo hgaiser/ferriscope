@@ -78,6 +78,8 @@ pub unsafe extern "C" fn create_device(
 			}
 		}
 		if !has_maintenance1 {
+			// Downstream layers may have consumed the link during the failed attempt.
+			(*chain_info).p_layer_info = (*link).p_next;
 			result = next_create_device(physical_device, p_create_info, p_allocator, p_device);
 		}
 		if result != VK_SUCCESS {
