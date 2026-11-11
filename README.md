@@ -1,3 +1,5 @@
+![ferriscope](assets/banner-readme.png)
+
 # ferriscope
 
 A headless, single-application Wayland compositor whose output is an encoder.
