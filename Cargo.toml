@@ -38,6 +38,8 @@ tracing-subscriber = { workspace = true, optional = true }
 wayland-scanner = "0.31"
 wayland-server = "0.31"
 wayland-backend = "0.3"
+# Encodes the screenshot Steam requests (`render/screenshot.rs`).
+png = "0.18"
 
 [package.metadata.cargo-machete]
 # Used only by the code `wayland-scanner`'s macros generate, which machete does

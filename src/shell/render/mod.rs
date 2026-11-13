@@ -6,6 +6,7 @@ pub(in crate::shell) mod gpu;
 pub(in crate::shell) mod hdr_shader;
 pub(in crate::shell) mod passthrough;
 pub(in crate::shell) mod pool;
+pub(in crate::shell) mod screenshot;
 
 use std::time::{Duration, Instant};
 
@@ -51,6 +52,11 @@ use smithay::{
 	backend::{allocator::Fourcc, renderer::ExportMem},
 	utils::{Buffer as BufferCoord, Rectangle},
 };
+
+/// Where Steam looks for a screenshot taken for its
+/// `GAMESCOPECTRL_REQUEST_SCREENSHOT` request (gamescope's default path,
+/// `steamcompmgr.cpp:7226`).
+const STEAM_SCREENSHOT_PATH: &str = "/tmp/gamescope.png";
 
 /// The space's render elements.
 type SpaceElements = Vec<SpaceRenderElements<VulkanRenderer, WaylandSurfaceRenderElement<VulkanRenderer>>>;
@@ -150,6 +156,10 @@ impl FerriscopeState {
 	/// that buffer (see [`passthrough`]). `None` means the frame must be
 	/// composited.
 	fn try_passthrough(&mut self, now: Instant) -> Result<Option<RenderOutcome>> {
+		// A screenshot needs composited pixels.
+		if self.pending_screenshot {
+			return Ok(None);
+		}
 		let Some(candidate) = self.passthrough_candidate() else {
 			return Ok(None);
 		};
@@ -189,7 +199,6 @@ impl FerriscopeState {
 		if let Some(outcome) = self.try_passthrough(now)? {
 			return Ok(outcome);
 		}
-		#[cfg(feature = "test-support")]
 		let buffer_size = self.frame_size;
 		// First, so the output encoding is settled before elements are built.
 		let info = self.frame_info(now);
@@ -355,6 +364,9 @@ impl FerriscopeState {
 			}
 
 			if handoff {
+				if self.pending_screenshot {
+					self.capture_pool_slot_screenshot(id, &sync, buffer_size);
+				}
 				// Each delivery gets a fresh generation, so a late release of an
 				// earlier delivery of the slot is recognised as stale. Generations
 				// start at one so that a handle is never zero.
@@ -460,6 +472,9 @@ impl FerriscopeState {
 					.map_err(|e| Error::Render(format!("map: {e:?}")))?;
 				copy_top_down(slice, buffer_size.w as usize, buffer_size.h as usize)
 			};
+			if self.pending_screenshot {
+				self.finish_screenshot(buffer_size.w as u32, buffer_size.h as u32, Ok::<_, String>(&pixels));
+			}
 			self.sink.submit(Frame {
 				info,
 				data: FrameData::Pixels(PixelBuffer {
@@ -642,7 +657,6 @@ pub(in crate::shell) fn fnv1a(hash: &mut u64, value: u64) {
 /// order, top row first; this only copies the mapped slice out and zero-pads
 /// missing rows (a short mapping yields blank rows rather than aborting the
 /// compositor). A partial trailing row counts as missing.
-#[cfg(feature = "test-support")]
 pub(in crate::shell) fn copy_top_down(data: &[u8], width: usize, height: usize) -> Vec<u8> {
 	let row = width * 4;
 	let whole_rows = data.len().checked_div(row).unwrap_or(0).min(height);

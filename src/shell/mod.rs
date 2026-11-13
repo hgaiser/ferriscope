@@ -235,6 +235,9 @@ pub struct FerriscopeState {
 	/// Steam's SDR white level in nits: how bright SDR content is drawn over HDR
 	/// (`flSDROnHDRBrightness`).
 	sdr_white_nits: f32,
+	/// Steam asked for a screenshot (`GAMESCOPECTRL_REQUEST_SCREENSHOT`) and the
+	/// next composited frame has not been captured yet.
+	pending_screenshot: bool,
 	/// The SDR-to-HDR conversion shader; compiled when HDR output is on.
 	sdr_program: Option<VulkanTexProgram>,
 	/// Whether the missing-HDR-format warning was logged.
@@ -598,6 +601,7 @@ impl FerriscopeState {
 			output_encoding: ContentKind::Sdr,
 			app_wants_hdr: false,
 			sdr_white_nits: crate::hdr::DEFAULT_SDR_WHITE_NITS,
+			pending_screenshot: false,
 			sdr_program,
 			hdr_format_warned: false,
 			use_dmabuf,

@@ -44,7 +44,7 @@ use smithay::reexports::x11rb::{
 	protocol::{
 		Event as XEvent,
 		xproto::{
-			Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt, EventMask, GetPropertyReply,
+			Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt, EventMask, GetPropertyReply, Property,
 			InputFocus, PropMode, Window as X11Window,
 		},
 	},
@@ -201,6 +201,10 @@ pub struct XEvents {
 	pub touch_click_mode_changed: bool,
 	/// Steam changed `GAMESCOPE_SDR_ON_HDR_CONTENT_BRIGHTNESS` on the root.
 	pub sdr_brightness_changed: bool,
+	/// Steam set `GAMESCOPECTRL_REQUEST_SCREENSHOT` (or the debug variant) on
+	/// the root. Only a new value counts, not the compositor's own delete
+	/// (`handle_property_notify`, `steamcompmgr.cpp:7221`).
+	pub screenshot_requested: bool,
 }
 
 /// The ICCCM `WM_STATE` values the compositor writes.
@@ -277,6 +281,10 @@ pub struct SteamAtoms {
 	/// `GAMESCOPE_SDR_ON_HDR_CONTENT_BRIGHTNESS`: Steam's SDR white level in
 	/// nits, an `f32` stored as its bits.
 	sdr_on_hdr_brightness: Atom,
+	/// `GAMESCOPECTRL_REQUEST_SCREENSHOT`: Steam asks for a screenshot.
+	screenshot: Atom,
+	/// `GAMESCOPECTRL_DEBUG_REQUEST_SCREENSHOT`: the debug variant.
+	debug_screenshot: Atom,
 }
 
 impl SteamAtoms {
@@ -337,6 +345,8 @@ impl SteamAtoms {
 			hdr_output_feedback: intern(&conn, b"GAMESCOPE_HDR_OUTPUT_FEEDBACK")?,
 			app_wants_hdr_feedback: intern(&conn, b"GAMESCOPE_COLOR_APP_WANTS_HDR_FEEDBACK")?,
 			sdr_on_hdr_brightness: intern(&conn, b"GAMESCOPE_SDR_ON_HDR_CONTENT_BRIGHTNESS")?,
+			screenshot: intern(&conn, b"GAMESCOPECTRL_REQUEST_SCREENSHOT")?,
+			debug_screenshot: intern(&conn, b"GAMESCOPECTRL_DEBUG_REQUEST_SCREENSHOT")?,
 			conn,
 		};
 		atoms.set_xwayland_server_id(crate::steam::display_id_to_server_id(display));
@@ -657,10 +667,26 @@ impl SteamAtoms {
 				{
 					events.touch_click_mode_changed = true;
 				},
+				XEvent::PropertyNotify(notify)
+					if notify.window == self.root
+						&& (notify.atom == self.screenshot || notify.atom == self.debug_screenshot)
+						&& notify.state == Property::NEW_VALUE =>
+				{
+					events.screenshot_requested = true;
+				},
 				_ => {},
 			}
 		}
 		events
+	}
+
+	/// Tell Steam the screenshot request is finished, as gamescope does after
+	/// it writes the file or fails to (`steamcompmgr.cpp:4029-4057`): delete
+	/// both request properties from the root.
+	pub fn finish_screenshot(&self) {
+		let _ = self.conn.delete_property(self.root, self.screenshot);
+		let _ = self.conn.delete_property(self.root, self.debug_screenshot);
+		let _ = self.conn.flush();
 	}
 
 	/// The window the X server currently reports as the input focus.

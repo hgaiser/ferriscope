@@ -694,6 +694,13 @@ impl FerriscopeState {
 			}
 			self.scheduler.commit(std::time::Instant::now());
 		}
+		if events.screenshot_requested {
+			// The next frame must be composited (not a passed-through client
+			// buffer) so there are pixels to capture, and a commit forces one
+			// even when the scene is unchanged.
+			self.pending_screenshot = true;
+			self.scheduler.commit(std::time::Instant::now());
+		}
 		if events.touch_click_mode_changed
 			&& let Some(mode) = self.steam.as_ref().map(|steam| steam.read_touch_click_mode())
 		{

@@ -362,6 +362,11 @@ impl FerriscopeState {
 		let populated = self.space.elements().next().is_some() || !self.overlays.is_empty();
 		let slot_free = self.slot_free();
 		let scene = populated.then(|| self.scene_signature());
+		if !populated && self.pending_screenshot {
+			// Nothing is drawn, so no frame will come; answer anyway so Steam
+			// does not wait on the request.
+			self.finish_screenshot(0, 0, Err::<&[u8], _>("the scene is empty"));
+		}
 
 		if let Some(scene) = scene {
 			self.scheduler.observe(scene, now);
