@@ -191,6 +191,11 @@ impl XdgDecorationHandler for FerriscopeState {
 	fn unset_mode(&mut self, toplevel: ToplevelSurface) {
 		set_server_side(&toplevel);
 	}
+
+	fn decoration_destroyed(&mut self, toplevel: ToplevelSurface) {
+		// Smithay resets the mode to `None` here; restore server-side.
+		set_server_side(&toplevel);
+	}
 }
 
 fn set_server_side(toplevel: &ToplevelSurface) {

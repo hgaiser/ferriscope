@@ -33,7 +33,10 @@ impl FerriscopeState {
 			return Ok(());
 		}
 
-		let (xwayland, client) = XWayland::spawn(
+		// `spawn_with_inherited_env` keeps the compositor's environment, so
+		// Xwayland finds a GPU driver installed outside the default paths
+		// (LD_LIBRARY_PATH, __EGL_VENDOR_LIBRARY_DIRS, ...) and gets hardware GLX.
+		let (xwayland, client) = XWayland::spawn_with_inherited_env(
 			&self.display_handle,
 			None,
 			std::iter::empty::<(String, String)>(),
