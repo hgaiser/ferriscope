@@ -21,7 +21,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libgbm-dev libdrm-dev libwayland-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libgbm-dev libdrm-dev libwayland-dev libxkbcommon-dev
 
       - name: Run cargo check
         run: cargo check --workspace --all-targets --all-features
@@ -36,7 +36,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libgbm-dev libdrm-dev libwayland-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libgbm-dev libdrm-dev libwayland-dev libxkbcommon-dev
 
       # The integration tests need a GPU and a display stack, so CI runs the
       # unit and doc tests only.
@@ -58,7 +58,7 @@ jobs:
           components: clippy
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libgbm-dev libdrm-dev libwayland-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libgbm-dev libdrm-dev libwayland-dev libxkbcommon-dev
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -87,7 +87,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libgbm-dev libdrm-dev libwayland-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libgbm-dev libdrm-dev libwayland-dev libxkbcommon-dev
 
       - name: Build documentation
         run: cargo doc --no-deps --all-features
