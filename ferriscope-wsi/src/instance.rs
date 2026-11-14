@@ -199,6 +199,8 @@ pub unsafe extern "C" fn create_instance(
 		if result == VK_ERROR_EXTENSION_NOT_PRESENT && wayland.is_some() {
 			crate::log_warn!("the driver rejected the WSI extensions the layer added; passing through");
 			wayland = None;
+			// Downstream layers may have consumed the link during the failed attempt.
+			(*chain_info).p_layer_info = (*link).p_next;
 			result = next_create_instance(p_create_info, p_allocator, p_instance);
 		}
 		if result != VK_SUCCESS {
