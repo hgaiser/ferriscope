@@ -263,10 +263,11 @@ impl FerriscopeState {
 				}
 				let alpha = opacity as f32 / OPAQUE as f32;
 				let location = Point::<i32, Physical>::from((overlay.location.x, overlay.location.y));
-				let surface_elements = render_elements_from_surface_tree::<
-					VulkanRenderer,
-					Wrap<WaylandSurfaceRenderElement<VulkanRenderer>>,
-				>(&mut self.renderer, &surface, location, 1.0, alpha, Kind::Unspecified);
+				let surface_elements =
+					render_elements_from_surface_tree::<
+						VulkanRenderer,
+						Wrap<WaylandSurfaceRenderElement<VulkanRenderer>>,
+					>(&mut self.renderer, &surface, location, 1.0, alpha, Kind::Unspecified);
 
 				// gamescope paints an overlay with its own committed texture
 				// fit to the output, centred, ignoring the window's position

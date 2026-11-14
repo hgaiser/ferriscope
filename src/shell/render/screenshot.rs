@@ -39,7 +39,11 @@ impl FerriscopeState {
 		size: Size<i32, BufferCoord>,
 	) {
 		let pixels = self.read_pool_slot(id, sync, size);
-		self.finish_screenshot(size.w as u32, size.h as u32, pixels.as_deref().map_err(|e| e.to_string()));
+		self.finish_screenshot(
+			size.w as u32,
+			size.h as u32,
+			pixels.as_deref().map_err(|e| e.to_string()),
+		);
 	}
 
 	fn read_pool_slot(
@@ -49,12 +53,14 @@ impl FerriscopeState {
 		size: Size<i32, BufferCoord>,
 	) -> Result<Vec<u8>> {
 		if !sync.is_reached() {
-			sync.wait().map_err(|e| Error::Render(format!("screenshot fence wait: {e:?}")))?;
+			sync.wait()
+				.map_err(|e| Error::Render(format!("screenshot fence wait: {e:?}")))?;
 		}
 		let dmabuf = self.pool.slots[id]
 			.as_mut()
 			.ok_or_else(|| Error::Render("dmabuf slot missing".into()))?;
-		let target = Bind::bind(&mut self.renderer, dmabuf).map_err(|e| Error::Render(format!("bind dmabuf: {e:?}")))?;
+		let target =
+			Bind::bind(&mut self.renderer, dmabuf).map_err(|e| Error::Render(format!("bind dmabuf: {e:?}")))?;
 		let region = Rectangle::<i32, BufferCoord>::from_size(size);
 		let mapping = self
 			.renderer

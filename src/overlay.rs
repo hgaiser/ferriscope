@@ -44,8 +44,8 @@ use smithay::reexports::x11rb::{
 	protocol::{
 		Event as XEvent,
 		xproto::{
-			Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt, EventMask, GetPropertyReply, Property,
-			InputFocus, PropMode, Window as X11Window,
+			Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt, EventMask, GetPropertyReply,
+			InputFocus, PropMode, Property, Window as X11Window,
 		},
 	},
 	rust_connection::RustConnection,

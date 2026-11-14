@@ -1,10 +1,10 @@
 [package]
 name = "ferriscope"
 description = "A Rust port of gamescope: a headless streaming compositor, as a library and a binary"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license = "BSD-2-Clause"
 repository.workspace = true
 
 [features]

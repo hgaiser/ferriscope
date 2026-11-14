@@ -95,7 +95,11 @@ fn steam_screenshot_request_writes_a_png_and_clears_the_property() {
 		}
 		thread::sleep(Duration::from_millis(10));
 	}
-	assert!(cleared, "the compositor never deleted the request property (frames seen: {})", FRAMES.load(std::sync::atomic::Ordering::Relaxed));
+	assert!(
+		cleared,
+		"the compositor never deleted the request property (frames seen: {})",
+		FRAMES.load(std::sync::atomic::Ordering::Relaxed)
+	);
 
 	let metadata = std::fs::metadata(SCREENSHOT_PATH).expect("the screenshot file exists");
 	assert!(metadata.modified().unwrap() >= started, "the screenshot is stale");

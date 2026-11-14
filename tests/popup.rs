@@ -102,7 +102,8 @@ fn a_grabbing_popup_takes_the_keyboard_and_a_click_on_its_window_reaches_the_win
 	click(&mut started);
 	assert!(support::wait_log(&started.client, EVENT_TIMEOUT, |log| log
 		.pointer_button
-		.len() >= 2));
+		.len()
+		>= 2));
 
 	assert!(started.client.command(CommandKind::CreatePopup {
 		x: 40,

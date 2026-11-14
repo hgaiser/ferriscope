@@ -2,6 +2,10 @@
 
 # ferriscope
 
+[![CI](https://github.com/hgaiser/ferriscope/workflows/CI/badge.svg)](https://github.com/hgaiser/ferriscope/actions)
+[![Crates.io](https://img.shields.io/crates/v/ferriscope.svg)](https://crates.io/crates/ferriscope)
+[![Documentation](https://docs.rs/ferriscope/badge.svg)](https://docs.rs/ferriscope)
+
 A headless, single-application Wayland compositor whose output is an encoder.
 It hosts one fullscreen application (a native or Proton game, or the Steam UI),
 composites its output, and hands frames to a consumer, such as a video encoder,
@@ -65,7 +69,7 @@ The integration suite needs a GPU, Xwayland and the DRM render node. It is
 cargo test -p ferriscope --no-fail-fast -- --ignored --test-threads=1
 ```
 
-Minimum Rust version 1.87.
+Minimum Rust version 1.95.
 
 ## Install the WSI layer
 
@@ -108,7 +112,33 @@ cargo run -p ferriscope -- --width 1280 --height 720 --xwayland -- vkcube
 
 `--help` lists the flags (`--steam`, `--hdr`, `--record-dir`, ...).
 
-## Copyright
+## Module map
 
+| Concern | Module |
+|-----------------------------|--------------------|
+| In-process library boundary | `compositor` |
+| Launch configuration | `config` |
+| Frame delivery policy | `delivery` |
+| Frame contract | `frame` |
+| Frame sink contract | `sink` |
+| CPU recorders, text control socket (`test-support`) | `recorder`, `control` |
+| Wayland server + shell | `shell` |
+| Seat / input control stream | `seat` |
+| Focus selection (gamescope port) + pointer capture | `focus` |
+| Output fill scaling | `scaling` |
+| gamescope action bindings (hotkeys) | `action_binding` |
+| gamescope WSI protocols (override surfaces) | `swapchain` |
+| Cursor position and client cursor images | `cursor` |
+| Second X connection: Steam atoms in, focus contract out | `overlay` |
+| Optional `--steam` mode | `steam` |
+| Touch click modes | `touch` |
+| Pen input via `zwp_tablet_v2` (ferriscope extension) | `shell::pen` |
+| Steam on-screen keyboard (`gamescope_input_method`) | `ime` |
+| Colour / HDR metadata | `colour_meta` |
+| HDR content classification (WSI swapchain) | `hdr` |
+
+## Copyright
 Gamescope's copyright (Valve Corporation and contributors)
 applies to the derived code.
+
+License: BSD-2-Clause
