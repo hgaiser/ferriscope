@@ -173,6 +173,7 @@ mod gpu_tests {
 	/// Every picked format allocates above 2560x2560, where AMD GFX10/GFX11
 	/// reject the driver's preferred DCC modifier.
 	#[test]
+	#[ignore = "requires GPU"]
 	fn picked_formats_allocate_above_1440p() {
 		let (renderer, mut allocator) = crate::shell::render::gpu::test_renderer();
 
