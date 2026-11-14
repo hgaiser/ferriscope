@@ -363,8 +363,8 @@ dependencies = [
  "bitflags",
  "clap",
  "ferriscope",
+ "ferriscope-smithay",
  "png",
- "smithay",
  "thiserror",
  "tracing",
  "tracing-subscriber",
@@ -374,6 +374,52 @@ dependencies = [
  "wayland-scanner",
  "wayland-server",
  "x11rb 0.13.2",
+]
+
+[[package]]
+name = "ferriscope-smithay"
+version = "0.7.1+a9822e8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33aa07718272753efd2f6b613f75f6d23185118599f3e8b082d13453bc00de2d"
+dependencies = [
+ "appendlist",
+ "ash",
+ "bitflags",
+ "bytemuck",
+ "calloop",
+ "cc",
+ "cursor-icon",
+ "downcast-rs",
+ "drm",
+ "drm-ffi",
+ "drm-fourcc",
+ "drm-sys",
+ "encoding_rs",
+ "errno",
+ "gbm",
+ "glam",
+ "include_bytes_aligned",
+ "indexmap",
+ "libc",
+ "pkg-config",
+ "portable-atomic",
+ "profiling",
+ "rand",
+ "reis",
+ "rustix 1.1.4",
+ "scopeguard",
+ "shaderc",
+ "siphasher",
+ "smallvec",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "wayland-protocols",
+ "wayland-protocols-misc",
+ "wayland-protocols-wlr",
+ "wayland-server",
+ "x11rb 0.14.0",
+ "xkbcommon",
 ]
 
 [[package]]
@@ -857,51 +903,6 @@ name = "smallvec"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
-
-[[package]]
-name = "smithay"
-version = "0.7.0"
-source = "git+https://github.com/hgaiser/smithay?rev=a9822e8e78b68d40c8372fc1315505cbd618fe63#a9822e8e78b68d40c8372fc1315505cbd618fe63"
-dependencies = [
- "appendlist",
- "ash",
- "bitflags",
- "bytemuck",
- "calloop",
- "cc",
- "cursor-icon",
- "downcast-rs",
- "drm",
- "drm-ffi",
- "drm-fourcc",
- "drm-sys",
- "encoding_rs",
- "errno",
- "gbm",
- "glam",
- "include_bytes_aligned",
- "indexmap",
- "libc",
- "pkg-config",
- "portable-atomic",
- "profiling",
- "rand",
- "reis",
- "rustix 1.1.4",
- "scopeguard",
- "shaderc",
- "siphasher",
- "smallvec",
- "tempfile",
- "thiserror",
- "tracing",
- "wayland-protocols",
- "wayland-protocols-misc",
- "wayland-protocols-wlr",
- "wayland-server",
- "x11rb 0.14.0",
- "xkbcommon",
-]
 
 [[package]]
 name = "strsim"
