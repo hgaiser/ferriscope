@@ -66,8 +66,20 @@ The integration suite needs a GPU, Xwayland and the DRM render node. It is
 `#[ignore]`d, so run it explicitly:
 
 ```sh
-cargo test -p ferriscope --no-fail-fast -- --ignored --test-threads=1
+cargo test -p ferriscope --no-fail-fast -- --ignored
 ```
+
+Tests run one at a time: `.cargo/config.toml` sets `RUST_TEST_THREADS=1`.
+Do not pass a higher `--test-threads`. In one test process, parallel tests
+break each other:
+
+- Each GPU test makes its own Vulkan instance. When two tests make and
+  destroy instances at the same time, the Vulkan loader crashes or
+  deadlocks: one thread unloads the driver while another still reads its
+  extensions.
+- Each integration test runs a whole compositor. Two compositors in one
+  process disturb each other's timing; for example, the cursor in
+  `cursor_composited` does not hide in time.
 
 Minimum Rust version 1.95.
 

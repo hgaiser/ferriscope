@@ -1,0 +1,9 @@
+[env]
+# Run tests one at a time; parallel tests in one process break each other.
+# Each GPU test makes its own Vulkan instance, and when two tests make and
+# destroy instances at the same time, the Vulkan loader crashes or deadlocks
+# (one thread unloads the driver while another still reads its extensions).
+# Each integration test also runs a whole compositor, and two in one process
+# disturb each other's timing. See "Build and test" in the crate docs.
+# An explicit `--test-threads` overrides this.
+RUST_TEST_THREADS = "1"
