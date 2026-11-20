@@ -416,7 +416,8 @@ impl FerriscopeState {
 			.try_clone()
 			.map_err(|e| Error::Gpu(format!("dup {}: {e}", config.render_node.display())))?;
 		let gbm = GbmDevice::new(Arc::new(file)).map_err(|e| Error::Gpu(format!("gbm device: {e:?}")))?;
-		let mut renderer = render::gpu::create_renderer(&config.render_node, renderer_file)?;
+		let mut renderer =
+			render::gpu::create_renderer(&config.render_node, renderer_file, config.vulkan_instance.as_ref())?;
 		let allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
 		let render_format = pick_render_format(&renderer)?;
 		let sdr_program = if config.hdr {

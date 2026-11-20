@@ -6,27 +6,37 @@ use smithay::{
 	backend::{
 		drm::{DrmDeviceFd, DrmNode},
 		renderer::vulkan::VulkanRenderer,
-		vulkan::{Instance, PhysicalDevice, version::Version},
+		vulkan::PhysicalDevice,
 	},
 	utils::DeviceFd,
 };
 
-use crate::error::{Error, Result};
+use crate::{
+	error::{Error, Result},
+	vulkan::VulkanInstance,
+};
 
 /// Create the renderer on the GPU behind `render_node`.
 ///
 /// The renderer composites on a compute-only queue family when the GPU has one
 /// (ADR 0008), so the composite does not share a hardware queue with the
 /// game's graphics work. `file` is an open handle to `render_node`; the
-/// renderer uses it to export sync_files.
-pub(in crate::shell) fn create_renderer(render_node: &Path, file: std::fs::File) -> Result<VulkanRenderer> {
+/// renderer uses it to export sync_files. `instance` is the embedder's shared
+/// instance; without one, the renderer gets its own.
+pub(in crate::shell) fn create_renderer(
+	render_node: &Path,
+	file: std::fs::File,
+	instance: Option<&VulkanInstance>,
+) -> Result<VulkanRenderer> {
 	let dev = std::fs::metadata(render_node)
 		.map_err(|e| Error::Gpu(format!("stat {}: {e}", render_node.display())))?
 		.rdev();
 	let node = DrmNode::from_dev_id(dev).map_err(|e| Error::Gpu(format!("drm node {}: {e}", render_node.display())))?;
-	let instance =
-		Instance::new(Version::VERSION_1_3, None).map_err(|e| Error::Gpu(format!("vulkan instance: {e:?}")))?;
-	let phd = PhysicalDevice::enumerate(&instance)
+	let instance = match instance {
+		Some(instance) => instance.clone(),
+		None => VulkanInstance::new()?,
+	};
+	let phd = PhysicalDevice::enumerate(instance.smithay())
 		.map_err(|e| Error::Gpu(format!("enumerate vulkan devices: {e:?}")))?
 		.find(|phd| phd.render_node().ok().flatten() == Some(node) || phd.primary_node().ok().flatten() == Some(node))
 		.ok_or_else(|| Error::Gpu(format!("no vulkan device for {}", render_node.display())))?;
@@ -57,7 +67,7 @@ pub(in crate::shell) fn test_renderer() -> (
 			.open(RENDER_NODE)
 			.expect("open the render node")
 	};
-	let renderer = create_renderer(Path::new(RENDER_NODE), open()).expect("vulkan renderer");
+	let renderer = create_renderer(Path::new(RENDER_NODE), open(), None).expect("vulkan renderer");
 	let gbm = GbmDevice::new(std::sync::Arc::new(open())).expect("gbm device");
 	(renderer, GbmAllocator::new(gbm, GbmBufferFlags::RENDERING))
 }

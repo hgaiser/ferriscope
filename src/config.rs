@@ -9,7 +9,9 @@
 
 use std::{path::PathBuf, time::Duration};
 
-use crate::{cursor::DEFAULT_CURSOR_HIDE_TIME, keyboard::KeyboardConfig, touch::TouchClickMode};
+use crate::{
+	cursor::DEFAULT_CURSOR_HIDE_TIME, keyboard::KeyboardConfig, touch::TouchClickMode, vulkan::VulkanInstance,
+};
 
 /// Default [`ChannelOutput::pool_size`].
 pub(crate) const DEFAULT_POOL_SIZE: usize = 3;
@@ -25,6 +27,13 @@ pub struct CompositorConfig {
 	pub rate: f64,
 	/// DRM render node used for offscreen rendering.
 	pub render_node: PathBuf,
+	/// Vulkan instance to render with; `None` creates one for this run.
+	///
+	/// An embedder that runs compositors one after another in one process
+	/// should create one [`VulkanInstance`] and give every compositor a clone,
+	/// so the Vulkan driver is not unloaded and loaded again for each run (see
+	/// [`VulkanInstance`]).
+	pub vulkan_instance: Option<VulkanInstance>,
 	/// Directory the Wayland socket is created in; `$XDG_RUNTIME_DIR` when
 	/// `None`.
 	///
@@ -82,6 +91,7 @@ impl Default for CompositorConfig {
 			height: 1080,
 			rate: 60.0,
 			render_node: PathBuf::from("/dev/dri/renderD128"),
+			vulkan_instance: None,
 			runtime_dir: None,
 			command: None,
 			xwayland: false,

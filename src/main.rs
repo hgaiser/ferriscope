@@ -130,6 +130,8 @@ fn main() -> ferriscope::Result<()> {
 		height: cli.height,
 		rate: cli.rate,
 		render_node: cli.render_node,
+		// One compositor per process: it may own its instance.
+		vulkan_instance: None,
 		runtime_dir: cli.runtime_dir,
 		command: (!cli.command.is_empty()).then_some(cli.command),
 		xwayland: cli.xwayland,

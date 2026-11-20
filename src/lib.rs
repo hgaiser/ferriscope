@@ -111,6 +111,11 @@
 //! The `test-support` feature (CPU PPM recorder, control socket) is enabled by the
 //! binary and the tests; embedders leave it off.
 //!
+//! An embedder that runs compositors one after another in one process creates
+//! one `VulkanInstance` and gives each compositor a clone through
+//! `CompositorConfig::vulkan_instance`. Then the Vulkan driver stays loaded
+//! between runs; without it, NVIDIA's driver fails after about 26 runs.
+//!
 //! # Running the binary
 //!
 //! ```sh
@@ -175,6 +180,7 @@ mod sink;
 mod steam;
 mod swapchain;
 mod touch;
+mod vulkan;
 
 pub use colour_meta::{
 	Chromaticity, ColourMetadata, ColourPrimaries, ColourRange, ContentLightLevel, MasteringDisplay,
@@ -194,6 +200,7 @@ pub use seat::{InputEvent, PenEvent, PenTool, pen_tilt};
 #[cfg(feature = "test-support")]
 pub use steam::display_id_to_server_id;
 pub use touch::TouchClickMode;
+pub use vulkan::VulkanInstance;
 
 // Re-export the smithay buffer types exposed by the public frame API, so a
 // consumer does not need to depend on the same smithay git revision. `Dmabuf`
