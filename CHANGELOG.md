@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Give a window the Steam app id in its client's `SteamAppId` environment variable when its cgroup and parent processes name none. A wrapper in a game's Steam launch options, such as `gamescope -- %command%`, runs outside the game's scope and reaper, so its window had no app id, and Steam-controlled focus kept Steam's loading screen in front of the game.
+
 ## [v0.2.1] - 2026-11-21
 
 ### Fixed

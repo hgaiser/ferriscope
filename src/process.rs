@@ -8,6 +8,11 @@
 //! `app-steam-app<appid>-<pid>.scope` in its cgroup, then from the
 //! `reaper SteamLaunch AppId=<appid>` process it runs under. A Proton game with
 //! `PROTON_ENABLE_WAYLAND=1` is such a window.
+//!
+//! ferriscope adds a third source that gamescope does not have: the
+//! `SteamAppId` variable in the client's environment. A wrapper in a game's
+//! launch options (`gamescope -- %command%`) runs outside Steam's scope and
+//! reaper, which are its children, but Steam still sets `SteamAppId` for it.
 
 use std::fs;
 
@@ -53,11 +58,32 @@ pub(crate) fn app_id_from_pid(pid: u32) -> u32 {
 	if from_cgroup != 0 {
 		return from_cgroup;
 	}
-	app_id_from_reaper(
+	let from_reaper = app_id_from_reaper(
 		pid,
 		|pid| fs::read_to_string(format!("/proc/{pid}/stat")).ok(),
 		|pid| fs::read(format!("/proc/{pid}/cmdline")).ok(),
-	)
+	);
+	if from_reaper != 0 {
+		return from_reaper;
+	}
+	fs::read(format!("/proc/{pid}/environ"))
+		.map(|environ| app_id_from_environ(&environ))
+		.unwrap_or(0)
+}
+
+/// The `SteamAppId` in a `/proc/<pid>/environ` listing, 0 when it is absent,
+/// zero or not a number.
+///
+/// Steam sets it for every process of a game's launch command, including a
+/// wrapper such as `gamescope` that runs outside the game's scope and reaper.
+/// Steam's own processes do not have it.
+fn app_id_from_environ(environ: &[u8]) -> u32 {
+	environ
+		.split(|byte| *byte == 0)
+		.find_map(|var| var.strip_prefix(b"SteamAppId="))
+		.and_then(|value| std::str::from_utf8(value).ok())
+		.and_then(|value| value.parse::<u32>().ok())
+		.unwrap_or(0)
 }
 
 /// `GetAppIdFromCgroup` (`Process.cpp:666`): the app id of the first
@@ -245,6 +271,23 @@ mod tests {
 			(22, "reaper", 1, &["reaper", "SteamLaunch", "AppId=8", "--"]),
 		]);
 		assert_eq!(lookup(&processes, 20), 8);
+	}
+
+	#[test]
+	fn the_environment_names_the_app_of_a_wrapper() {
+		assert_eq!(
+			app_id_from_environ(b"HOME=/home/user\0SteamAppId=552520\0SteamGameId=552520\0"),
+			552_520
+		);
+	}
+
+	#[test]
+	fn an_environment_without_a_valid_steam_app_id_has_no_app() {
+		assert_eq!(app_id_from_environ(b""), 0);
+		assert_eq!(app_id_from_environ(b"SteamGameId=552520\0"), 0);
+		assert_eq!(app_id_from_environ(b"SteamAppId=0\0"), 0);
+		assert_eq!(app_id_from_environ(b"SteamAppId=abc\0"), 0);
+		assert_eq!(app_id_from_environ(b"XSteamAppId=5\0"), 0);
 	}
 
 	#[test]
