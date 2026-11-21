@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Send a black frame immediately when no window is mapped, then send frames at the static keepalive interval. Previously, an output without a window sent no frames. A streaming client waiting for its first frame could give up while an application started. Moonlight ends a stream after 10 seconds without video. Steam with `-silent` and a Proton game can take about 30 seconds to show a window.
+
 ## [v0.2.2] - 2026-11-21
 
 ### Fixed
