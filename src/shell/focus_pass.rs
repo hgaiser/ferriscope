@@ -670,6 +670,9 @@ impl FerriscopeState {
 		let control = events.control_changed.then(|| steam.read_focus_control());
 		let fps_limit = events.fps_limit_changed.then(|| steam.read_fps_limit());
 		let keyboard_layout = events.keyboard_layout_changed.then(|| steam.read_keyboard_layout());
+		for &icon in &events.systray_icons {
+			self.dock_systray_icon(icon);
+		}
 		if let Some(control) = control {
 			self.focus_control = control;
 			self.mark_focus_dirty();

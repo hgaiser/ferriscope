@@ -16,6 +16,9 @@
 //! - **override-redirect**: an override-redirect window maps over the window
 //!   and does not take focus (`_NET_ACTIVE_WINDOW` and input focus are
 //!   unchanged);
+//! - **system tray**: the compositor owns `_NET_SYSTEM_TRAY_S0`, and a window
+//!   docked into it (`SYSTEM_TRAY_REQUEST_DOCK`) does not take focus when it
+//!   maps, as under gamescope;
 //! - **dialog**: a parented transient/dialog takes `_NET_ACTIVE_WINDOW` and the
 //!   X input focus and is not made fullscreen; unmapping it returns focus to
 //!   the window;
@@ -295,6 +298,55 @@ fn create_override_redirect_window(display: u32) -> x11rb::rust_connection::Rust
 	conn
 }
 
+/// Dock a new top-level window in the system tray on `:N`, then map it.
+///
+/// Wine docks a notification icon this way. Without a tray it shows the icons
+/// in a small window of its own instead. The returned connection must stay
+/// alive for the window to exist.
+fn create_systray_icon(display: u32) -> RustConnection {
+	let (conn, screen_num) = x11rb::connect(Some(&format!(":{display}"))).expect("connect to Xwayland");
+	let screen = &conn.setup().roots[screen_num];
+	let intern = |name: &[u8]| {
+		conn.intern_atom(false, name)
+			.expect("intern")
+			.reply()
+			.expect("atom")
+			.atom
+	};
+	let selection = intern(format!("_NET_SYSTEM_TRAY_S{screen_num}").as_bytes());
+	let opcode = intern(b"_NET_SYSTEM_TRAY_OPCODE");
+	let owner = conn
+		.get_selection_owner(selection)
+		.expect("get selection owner")
+		.reply()
+		.expect("selection owner")
+		.owner;
+	assert_ne!(owner, x11rb::NONE, "nobody owns _NET_SYSTEM_TRAY_S{screen_num}");
+	let window = conn.generate_id().expect("window id");
+	conn.create_window(
+		COPY_DEPTH_FROM_PARENT,
+		window,
+		screen.root,
+		0,
+		0,
+		24,
+		24,
+		0,
+		WindowClass::INPUT_OUTPUT,
+		COPY_FROM_PARENT,
+		&CreateWindowAux::new().background_pixel(screen.white_pixel),
+	)
+	.expect("create tray icon window");
+	// SYSTEM_TRAY_REQUEST_DOCK is opcode 0; data[2] is the icon window.
+	let dock = ClientMessageEvent::new(32, owner, opcode, [x11rb::CURRENT_TIME, 0, window, 0, 0]);
+	conn.send_event(false, owner, EventMask::NO_EVENT, dock)
+		.expect("send dock request");
+	conn.sync().expect("sync");
+	conn.map_window(window).expect("map tray icon window");
+	conn.flush().expect("flush");
+	conn
+}
+
 /// Create and map a dialog (a parented transient) on `:N`.
 ///
 /// Sets `WM_TRANSIENT_FOR` and `_NET_WM_WINDOW_TYPE_DIALOG`, the order a real
@@ -459,6 +511,21 @@ fn x11_focus_policy() {
 		focused_window(xdisplay).as_deref(),
 		Some(xev_window.as_str()),
 		"an override-redirect window took input focus"
+	);
+
+	// A window docked in the system tray maps after the window but never takes
+	// focus.
+	let _systray = create_systray_icon(xdisplay);
+	std::thread::sleep(OVERRIDE_SETTLE);
+	assert_eq!(
+		active_window(xdisplay).as_deref(),
+		Some(xev_window.as_str()),
+		"a system tray icon took _NET_ACTIVE_WINDOW"
+	);
+	assert_eq!(
+		focused_window(xdisplay).as_deref(),
+		Some(xev_window.as_str()),
+		"a system tray icon took input focus"
 	);
 
 	// A parented transient/dialog takes keyboard focus and `_NET_ACTIVE_WINDOW`

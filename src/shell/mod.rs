@@ -189,6 +189,10 @@ pub struct FerriscopeState {
 	windows: WindowTable,
 	/// Process-derived app ids by client pid (see `AppIdCache`).
 	pid_app_ids: crate::process::AppIdCache,
+	/// X11 windows docked in the system tray, kept from the dock request until
+	/// the window is destroyed: the request may come before the window maps,
+	/// and an unmap does not undock it.
+	systray_icons: std::collections::HashSet<u32>,
 	/// The WSI layer's override surfaces (see [`content`]).
 	content_overrides: ContentOverrides,
 	/// What the last focus pass applied (see [`AppliedFocus`]).
@@ -583,6 +587,7 @@ impl FerriscopeState {
 			space,
 			windows: WindowTable::default(),
 			pid_app_ids: crate::process::AppIdCache::default(),
+			systray_icons: std::collections::HashSet::new(),
 			content_overrides: ContentOverrides::default(),
 			focus: AppliedFocus::default(),
 			focus_control: FocusControl::default(),

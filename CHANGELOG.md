@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Own the X11 system tray selection (`_NET_SYSTEM_TRAY_S0`) and keep the windows docked in it out of the focus election, as gamescope does. Before, Wine found no tray and showed notification icons, such as the Ubisoft Connect icon, in a small window of its own at the top-left of the output, which could also take the mouse focus from the game. (hgaiser/moonshine#277)
+
 ## [v0.2.0] - 2026-11-20
 
 ### Added

@@ -383,6 +383,7 @@ impl FerriscopeState {
 			meta.pid_app_id = self.pid_app_ids.get(meta.pid);
 		}
 		apply_map_props(&mut meta, &props, self.config.steam);
+		meta.is_systray_icon = self.systray_icons.contains(&id);
 		tracing::debug!(pid = meta.pid, pid_app_id = meta.pid_app_id, "x11 window tracked");
 		// An overlay that is narrower than the output and wants no input is a
 		// notification, which is never resized (it is not the focus window).
@@ -460,6 +461,18 @@ impl FerriscopeState {
 	pub(in crate::shell) fn forget_window(&mut self, id: WindowId) {
 		self.focus.forget_iconified(id);
 		if self.windows.remove(id) {
+			self.mark_focus_dirty();
+		}
+	}
+
+	/// A client asked to dock `id` in the system tray (`handle_system_tray_opcode`,
+	/// `steamcompmgr.cpp:6719`). The window is never embedded or drawn; it only
+	/// stops taking part in the focus election.
+	pub(in crate::shell) fn dock_systray_icon(&mut self, id: WindowId) {
+		tracing::debug!(window = id, "system tray icon docked");
+		self.systray_icons.insert(id);
+		if let Some(managed) = self.windows.get_mut(id) {
+			managed.meta.is_systray_icon = true;
 			self.mark_focus_dirty();
 		}
 	}

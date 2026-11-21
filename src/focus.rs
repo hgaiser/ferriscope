@@ -22,7 +22,7 @@
 //! Every clause carries the `steamcompmgr.cpp:NNNN` line it is ported from
 //! (gamescope at `05949f81`). Clauses gamescope has and ferriscope deliberately
 //! does not (VR forwarding, per-connector strategies other than the two below,
-//! MangoApp message types, streaming-client windows, the system tray, Xalia
+//! MangoApp message types, streaming-client windows, Xalia
 //! decoration windows and override underlays) are left out on purpose, not
 //! silently dropped.
 //!
@@ -145,6 +145,9 @@ pub struct WindowMeta {
 	pub damage_seq: u64,
 	/// `window_has_commits` (`:1868`): a buffer has been committed.
 	pub has_commits: bool,
+	/// `isSysTrayIcon` (`:6734`): a client asked to dock the window in the
+	/// system tray.
+	pub is_systray_icon: bool,
 }
 
 impl WindowMeta {
@@ -177,6 +180,7 @@ impl WindowMeta {
 			map_seq: 0,
 			damage_seq: 0,
 			has_commits: false,
+			is_systray_icon: false,
 		}
 	}
 
@@ -199,10 +203,9 @@ impl WindowMeta {
 		self.app_id != 0
 	}
 
-	/// `win_is_useless` (`:3936`): a 1x1 window. (`isSysTrayIcon` is not
-	/// tracked.)
+	/// `win_is_useless` (`:3936`): a system tray icon or a 1x1 window.
 	pub fn is_useless(&self) -> bool {
-		self.geometry.w == 1 && self.geometry.h == 1
+		self.is_systray_icon || (self.geometry.w == 1 && self.geometry.h == 1)
 	}
 
 	/// `win_is_override_redirect` (`:3948`). (`ignoreOverrideRedirect`, the SDL
@@ -673,8 +676,8 @@ fn sort_by_priority(windows: Vec<&WindowMeta>) -> Vec<&WindowMeta> {
 fn possible_focus_windows<'a>(x11: &[&'a WindowMeta], strategy: FocusStrategy) -> Vec<&'a WindowMeta> {
 	let mut possible = Vec::new();
 	for window in x11 {
-		// :4465 overlays never take focus.
-		if window.is_overlay || window.is_external_overlay {
+		// :4465 system tray icons and overlays never take focus.
+		if window.is_systray_icon || window.is_overlay || window.is_external_overlay {
 			continue;
 		}
 
@@ -1448,6 +1451,22 @@ mod tests {
 		assert_eq!(picked.global.focus, Some(2));
 		assert_eq!(picked.ctx.keyboard_focus, Some(2));
 		assert_eq!(picked.global.keyboard_focus, Some(2));
+	}
+
+	#[test]
+	fn clause_4465_a_systray_icon_never_takes_focus() {
+		// Wine's tray icon window maps after the game, so it would win on
+		// `map_seq` alone.
+		let game = win(1);
+		let mut icon = win(2);
+		icon.is_systray_icon = true;
+		assert!(icon.is_useless());
+		let windows = [&game, &icon];
+		let possible = possible_focus_windows(&windows, FocusStrategy::SingleApplication);
+		assert_eq!(possible.iter().map(|w| w.id).collect::<Vec<_>>(), vec![1]);
+		let picked = run(&[game, icon]);
+		assert_eq!(picked.ctx.focus, Some(1));
+		assert_eq!(picked.ctx.override_window, None);
 	}
 
 	#[test]

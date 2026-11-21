@@ -224,6 +224,7 @@ impl XwmHandler for FerriscopeState {
 	fn destroyed_window(&mut self, _xwm: smithay::xwayland::xwm::XwmId, window: X11Surface) {
 		tracing::debug!(window = window.window_id(), title = %window.title(), "x11 destroyed");
 		self.forget_window_overrides(&window);
+		self.systray_icons.remove(&window.window_id());
 		self.forget_window(window.window_id());
 	}
 

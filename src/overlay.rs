@@ -44,8 +44,8 @@ use smithay::reexports::x11rb::{
 	protocol::{
 		Event as XEvent,
 		xproto::{
-			Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt, EventMask, GetPropertyReply,
-			InputFocus, PropMode, Property, Window as X11Window,
+			Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt, CreateWindowAux, EventMask,
+			GetPropertyReply, InputFocus, PropMode, Property, Window as X11Window, WindowClass,
 		},
 	},
 	rust_connection::RustConnection,
@@ -187,7 +187,7 @@ pub enum WatchedAtom {
 }
 
 /// What one drain of the connection's events saw.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct XEvents {
 	/// A `FocusOut` on a window the compositor focused.
 	pub focus_out: bool,
@@ -205,6 +205,10 @@ pub struct XEvents {
 	/// the root. Only a new value counts, not the compositor's own delete
 	/// (`handle_property_notify`, `steamcompmgr.cpp:7221`).
 	pub screenshot_requested: bool,
+	/// Windows a client asked to dock in the system tray
+	/// (`SYSTEM_TRAY_REQUEST_DOCK`, `handle_system_tray_opcode`,
+	/// `steamcompmgr.cpp:6719`).
+	pub systray_icons: Vec<X11Window>,
 }
 
 /// The ICCCM `WM_STATE` values the compositor writes.
@@ -285,6 +289,11 @@ pub struct SteamAtoms {
 	screenshot: Atom,
 	/// `GAMESCOPECTRL_DEBUG_REQUEST_SCREENSHOT`: the debug variant.
 	debug_screenshot: Atom,
+	/// `_NET_SYSTEM_TRAY_OPCODE`: the system tray's client message type.
+	systray_opcode: Atom,
+	/// The window that owns `_NET_SYSTEM_TRAY_S<screen>`, `None` when the
+	/// selection could not be taken.
+	systray_window: Option<X11Window>,
 }
 
 impl SteamAtoms {
@@ -347,6 +356,10 @@ impl SteamAtoms {
 			sdr_on_hdr_brightness: intern(&conn, b"GAMESCOPE_SDR_ON_HDR_CONTENT_BRIGHTNESS")?,
 			screenshot: intern(&conn, b"GAMESCOPECTRL_REQUEST_SCREENSHOT")?,
 			debug_screenshot: intern(&conn, b"GAMESCOPECTRL_DEBUG_REQUEST_SCREENSHOT")?,
+			systray_opcode: intern(&conn, b"_NET_SYSTEM_TRAY_OPCODE")?,
+			systray_window: register_systray(&conn, screen, root)
+				.inspect_err(|e| tracing::warn!("cannot own the system tray selection: {e}"))
+				.ok(),
 			conn,
 		};
 		atoms.set_xwayland_server_id(crate::steam::display_id_to_server_id(display));
@@ -648,6 +661,16 @@ impl SteamAtoms {
 		while let Ok(Some(event)) = self.conn.poll_for_event() {
 			match event {
 				XEvent::FocusOut(_) => events.focus_out = true,
+				XEvent::ClientMessage(message)
+					if Some(message.window) == self.systray_window && message.type_ == self.systray_opcode =>
+				{
+					let data = message.data.as_data32();
+					if data[1] == SYSTEM_TRAY_REQUEST_DOCK {
+						events.systray_icons.push(data[2]);
+					} else {
+						tracing::debug!(opcode = data[1], "unhandled _NET_SYSTEM_TRAY_OPCODE");
+					}
+				},
 				XEvent::PropertyNotify(notify) if notify.window == self.root && self.is_control_atom(notify.atom) => {
 					events.control_changed = true;
 				},
@@ -845,6 +868,52 @@ fn identify_as_steamcompmgr(
 	conn.change_property8(PropMode::REPLACE, window, AtomEnum::WM_NAME, AtomEnum::STRING, NAME)?;
 	conn.flush()?;
 	Ok(())
+}
+
+/// `SYSTEM_TRAY_REQUEST_DOCK` (`steamcompmgr.cpp:1563`).
+const SYSTEM_TRAY_REQUEST_DOCK: u32 = 0;
+
+/// Own `_NET_SYSTEM_TRAY_S<screen>` with a new input-only window, as gamescope
+/// does with its own window (`register_systray`, `steamcompmgr.cpp:8136`).
+///
+/// With a tray present, Wine docks a notification icon (the Ubisoft Connect
+/// launcher's, for example) into it as an XEmbed window. Without one, Wine's
+/// explorer shows the icons in its own small window in the top-left corner,
+/// which then takes part in the focus election like any other window.
+///
+/// The icons are never embedded or drawn: the dock requests only mark the
+/// windows so the focus election skips them. The `MANAGER` announcement
+/// (system tray specification) lets a client that started before the tray
+/// dock its icons too.
+fn register_systray(
+	conn: &RustConnection,
+	screen: usize,
+	root: X11Window,
+) -> Result<X11Window, Box<dyn std::error::Error + Send + Sync>> {
+	let window = conn.generate_id()?;
+	conn.create_window(
+		x11rb::COPY_DEPTH_FROM_PARENT,
+		window,
+		root,
+		-1,
+		-1,
+		1,
+		1,
+		0,
+		WindowClass::INPUT_ONLY,
+		x11rb::COPY_FROM_PARENT,
+		&CreateWindowAux::new(),
+	)?;
+	let selection = intern(conn, format!("_NET_SYSTEM_TRAY_S{screen}").as_bytes())?;
+	conn.set_selection_owner(window, selection, x11rb::CURRENT_TIME)?;
+	if conn.get_selection_owner(selection)?.reply()?.owner != window {
+		return Err("another client owns the selection".into());
+	}
+	let manager = intern(conn, b"MANAGER")?;
+	let announce = ClientMessageEvent::new(32, root, manager, [x11rb::CURRENT_TIME, selection, window, 0, 0]);
+	conn.send_event(false, root, EventMask::STRUCTURE_NOTIFY, announce)?;
+	conn.flush()?;
+	Ok(window)
 }
 
 /// Intern `name`, surfacing a connection error as a boxed error.
