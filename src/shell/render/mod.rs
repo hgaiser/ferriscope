@@ -68,11 +68,16 @@ impl FerriscopeState {
 	/// It folds the commit epoch (so any client commit is a change), each
 	/// window's surface id and location, each overlay's surface id, location and
 	/// layer, and the cursor position when a cursor would actually be drawn.
-	/// Content updates arrive as commits, so two ticks with the same signature
-	/// composite the same pixels.
+	/// Commits signal content changes, so matching signatures mean two ticks
+	/// produce the same pixels. Without a window, overlay or cursor, the output
+	/// is black regardless of commits from unmapped surfaces, so the signature
+	/// omits the commit epoch.
 	pub(in crate::shell) fn scene_signature(&self) -> u64 {
 		let mut hash = 0xcbf2_9ce4_8422_2325u64;
-		fnv1a(&mut hash, self.scheduler.commit_epoch());
+		let cursor = self.cursor_render_target();
+		if self.space.elements().next().is_some() || !self.overlays.is_empty() || cursor.is_some() {
+			fnv1a(&mut hash, self.scheduler.commit_epoch());
+		}
 		for window in self.space.elements() {
 			if let Some(surface) = self.window_content_surface(window) {
 				fnv1a(&mut hash, u64::from(surface.id().protocol_id()));
@@ -94,7 +99,7 @@ impl FerriscopeState {
 		}
 		// A hidden cursor contributes nothing; a visible one moves the
 		// signature with its position, so pointer motion re-composites.
-		if self.cursor_render_target().is_some() {
+		if cursor.is_some() {
 			fnv1a(
 				&mut hash,
 				(self.cursor.location.x as u32 as u64) << 32 | self.cursor.location.y as u32 as u64,
